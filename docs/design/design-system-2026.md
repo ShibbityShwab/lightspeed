@@ -488,10 +488,12 @@ Rules:
 - The shipped narrow multiplier breaks it: `STATE * 0.82` = 24.6 px gives a
   30 px Inter row and a measured **2.0 px** baseline drift against the 30 px
   metric (§4.5). At the mandated `STATE` 30 px the 288 px rail column overflows
-  for ES/PT-BR `NO RETURN PATH` (309.0 / 328.4 px) and RU `IDLE` (326.8 px) in
-  the current tree; RU `NO RETURN PATH` is already shortened to 222.9 px by the
-  coordinated copy fix (`delta-copy.md` §5). The metric needs its own row
-  regardless; the remedy is decided in §4.4 item 4 / §6.9 gap 11.
+  for two current-tree words — DE `OPTIMIERUNG LÄUFT` **317.4 px** (also over
+  the ≤276 cap) and RU `НЕ ОПТИМИЗИРУЕТСЯ` **315.7 px** (the retiring `idle`
+  row) — see the §4.6 erratum; the earlier ES/PT/RU overflow figures were HEAD
+  strings measured with a broken parser and their landed replacements measure
+  204.2 / 218.9 / 211.7 px. The metric needs its own row regardless; the remedy
+  is decided in §4.4 item 4 / §6.9 gap 11.
 
 ### 4.3 Numerals and units
 
@@ -524,39 +526,39 @@ two-line action is `ACTION_H_WRAPPED` 56 (two 19 px `EMPHASIS` rows = 38 + 2×S2
 54, rounded to the next 8-px step).
 
 Measured action labels at 264 px (greedy word wrap, `EMPHASIS` 15 Inter SemiBold,
-all nine locales):
+all nine locales; **corrected 2026-11-21 — see the §4.6 erratum; the earlier
+figures came from a broken cmap parser**):
 
 | label | locales at 1 line | locales at 2 lines | locales at 3 lines | worst width |
 |---|---|---|---|---|
-| `action.stop_optimizing` | all 9 | — | — | 225.7 px (ru) |
-| `action.optimize_route` | all 9 | — | — | 220.7 px (ru) |
-| `action.restart_admin_optimize` | ja, zh-Hans | en, de, es, fr, ko, pt-BR, ru | none | 383.0 px (de); RU was 518.6 px / 3 lines at HEAD, now 356.9 px / 2 lines (landed copy) |
+| `action.stop_optimizing` | all 9 | — | — | **220.1 px** (ru) |
+| `action.optimize_route` | all 9 | — | — | **215.1 px** (ru) |
+| `action.restart_admin_optimize` | ja, zh-Hans | en, de, es, ko, pt-BR, ru | **fr** | **424.0 px** (de); RU landed copy **340.2 px** / 2 lines; **FR 396.9 px / 3 lines — needs shortened copy or a chrome decision** |
 
-Every label now fits the two-line slot: the largest is DE 383.0 px (2 lines), and
-the previously-broken RU string was 518.6 px / 3 lines at HEAD and is 356.9 px /
-2 lines with `ux-lead`'s landed `ru.toml` copy (`Перезапустить от имени
-администратора`, dropping the "to optimize" purpose — flagged to `ux-lead`/spec
-to carry elsewhere). `ACTION_H_WRAPPED` 56 is therefore sufficient; the 73 px
-three-line option remains priced out (compact worst 256 chrome → 164 scroll,
-below the 180 floor). The type is never reduced, and the 9 px shrink floor is
-deleted either way.
+**Q15 is unchanged in outcome** (RU 340.2 px is still 2 lines; no 73 px slot),
+but **FR is a new finding**: its restart label wraps to three lines at 264 px
+(adding `OPTIMISER` to line 2 needs 268.7 px), and the 73 px three-line option
+is priced out (compact worst 256 chrome → 164 scroll, below the 180 floor).
+Every other label fits the two-line slot. The type is never reduced, and the
+9 px shrink floor is deleted either way.
 
-**New copy from master `76aba5d` measured at the mobile-only widths**
-(`delta-copy.py`; lines = greedy wrap at the render role; worst of nine locales):
+**Copy measured at the mobile-only widths** (fontTools re-measurement
+2026-11-21, §4.6 erratum — the earlier `delta-copy.py` numbers used the broken
+cmap parser; lines = greedy wrap at the render role; worst of nine locales):
 
 | copy | site / role | column | EN lines | worst lines |
 |---|---|---|---|---|
-| `route.relay_not_returning` (banner) | card banner / BODY SemiBold 13 | 248 px | 3 | **4** (de) |
-| `route.injection_failed_warning` (banner) | card banner / BODY SemiBold 13 | 248 px | 3 | **4** (de) |
-| `settings.starvation_policy` | settings sheet / CAPTION 11 | 264 px | 5 | **6** (de) |
-| `route.location_hosting_hint` | card location ladder / CAPTION 11 | 264 px | 2 | **3** (fr) |
-| `route.location_*` captions and details | card location ladder / CAPTION 11 | 264 px | 1–2 | 2 (hosting hint 3) |
+| `route.relay_not_returning` (banner) | card banner / BODY SemiBold 13 | 248 px | **4** | **4** (de) |
+| `route.injection_failed_warning` (banner) | card banner / BODY SemiBold 13 | 248 px | 3 | **3** (de) |
+| `settings.starvation_policy` | settings sheet / CAPTION 11 | 264 px | **4** | **4** (de) |
+| `route.location_hosting_hint` | card location ladder / CAPTION 11 | 264 px | 2 | **2** (de) |
+| `route.location_*` captions and details | card location ladder / CAPTION 11 | 264 px | 1–2 | 2 (hosting hint) |
 | `route.location_geofeed_note` | card / CAPTION 11 | 264 px | 2 | 2 |
 | `route.trace_route` + `route.trace_nearest` | card trace caption / CAPTION 11 | 264 px | 1 | 1 |
 | `route.route_trace_hops` (with sample values) | ledger value / JBMono 17 | 264 px | 2 | **3** (ru) |
-| `route.server_leg_relay_measured` | ledger value / JBMono 17 | 264 px | 2 | 2 (ru) |
-| `route.server_leg_relay_measured_unvalidated` | ledger value / JBMono 17 | 264 px | 2 | **3** (ru) |
-| `route.expected_path` | ledger value / JBMono 17 | 264 px | 1 | 2 (ru) |
+| `route.server_leg_relay_measured` | ledger value / JBMono 17 | 264 px | 2 | **3** (ru) |
+| `route.server_leg_relay_measured_unvalidated` | ledger value / JBMono 17 | 264 px | **3** | **3** (de) |
+| `route.expected_path` | ledger value / JBMono 17 | 264 px | **2** | 2 (de) |
 | `route.server_leg_app_measured` | ledger value / JBMono 17 | 264 px | 1 | 1 |
 | update-sheet hard-coded UAC line | sheet / BODY 13 | 264 px | 2 | 2 |
 
@@ -572,26 +574,26 @@ Consequences, stated as rules rather than tweaks:
 3. **The ledger/value rows wrap to 2–3 lines in RU** because the mono value is
    17 px in a 264 px column. The row grows in height; the value is never shrunk
    and no truncation-without-hover is allowed for a value the player needs.
-4. **At the mandated 30 px three current-tree words overflow the 288 px rail;
-   the metric must move to its own row, and DE `OPTIMIZING` passes the 276 cap.**
-   Dropping the shipped `0.82` multiplier renders the word at `STATE` 30 px.
-   **At HEAD four words exceeded 288 px** — RU `NO RETURN PATH` 342.8, RU `IDLE`
-   326.8, ES `NO RETURN PATH` 309.0, PT-BR `NO RETURN PATH` 328.4. **On the
-   current tree RU `NO RETURN PATH` is landed at 222.9 px** (`ux-lead`'s
-   `ru.toml` copy), so the remaining three are **ES 309.0 px and PT-BR 328.4 px
-   (copy-owner proposals, pending)** plus **RU `IDLE` 326.8 px (retired by the
-   A2 word set)**; DE `OPTIMIZING` **275.1 px is inside the ≤276 px acceptance
-   cap by 0.9 px** (thin — the optional `OPTIMIERUNG` 167.2 px slack stays
-   available). The metric cannot share the row either: word + S2 8 + metric 90
-   ≥ 366 px even at the shipped 24.6 px. **Acceptance proposed to the spec
-   owner: every locale's uppercased state word at `STATE` 30 px measures ≤276 px
-   in its installed chain (12 px / 4 % safety under 288, ±2 px measurement
-   tolerance).** **Recommended remedy: shorten the remaining over-budget words**
-   — ES `SIN RETORNO` 176.8 px and PT-BR `SEM RETORNO` 178.7 px (proposed
-   strings, pending the copy owner), RU `IDLE` contingency `НЕ АКТИВНО` 193.9 px
-   (only if A2 keeps `idle`; `НЕ ПОДКЛЮЧЕНО` 268.0 px for the A2 `not_connected`
-   row), with the DE `OPTIMIERUNG` 167.2 px slack as an option — keeping the
-   30 px type role, the 40 px hero band and the spec's 239/181 compact budget.
+4. **At the mandated 30 px two current-tree words fail the fit — DE
+   `OPTIMIERUNG LÄUFT` and the retiring RU `idle` — and the corrected numbers
+   replace the old overflow list (§4.6).** Dropping the shipped `0.82`
+   multiplier renders the word at `STATE` 30 px. Re-measured with fontTools:
+   **DE `OPTIMIERUNG LÄUFT` 317.4 px fails both the ≤276 cap and the 288 px
+   rail**, and RU `НЕ ОПТИМИЗИРУЕТСЯ` (idle) 315.7 px fails too but **retires
+   with the A2 word set**. The previously recorded ES 309.0 / PT-BR 328.4 /
+   RU 342.8 overflows were HEAD strings measured with the broken parser; the
+   landed/proposed replacements measure **RU `НЕТ ВОЗВРАТА` 211.7,
+   ES `SIN RETORNO` 204.2, PT-BR `SEM RETORNO` 218.9 — all pass**. **The DE
+   short copy `OPTIMIERUNG` (211.6 px) is therefore required, not optional**
+   (Q20; `ux-lead` landing `de.state.optimizing = "Optimierung"`), because the
+   current DE word cannot pass its own gate. The metric cannot share the row
+   either: word + S2 8 + metric 90 ≥ 366 px even at the shipped 24.6 px.
+   **Acceptance: every locale's uppercased state word at `STATE` 30 px measures
+   ≤276 px in its installed chain (12 px / 4 % safety under 288, ±2 px
+   measurement tolerance).** After the DE copy lands the thin passes to watch
+   are `NO RETURN PATH` 266.3 (EN/ja/ko/zh), ja idle 270.0 (retires with A2), DE
+   `NICHT OPTIMIERT` 267.0 and EN `NOT CONNECTED` 263.8 — keeping the 30 px type
+   role, the 40 px hero band and the spec's 239/181 compact budget.
    Fallbacks: a measured 24/25 px effective word size (the type role would no
    longer be 30 px), or a two-line hero, which prices the compact worst at
    275 chrome → 145 scroll, below the 180 floor (it needs an owner-approved floor
@@ -613,10 +615,100 @@ Consequences, stated as rules rather than tweaks:
 
 | # | shipped | measured effect | W2 |
 |---|---|---|---|
-| 1 | `STATE * 0.82` (`app.rs:2161`) always taken (`narrow` is always true at 320 px) | state word renders at 24.6 px, not 30; 2.0 px baseline drift vs the metric; at the mandated `STATE` 30 px the current tree overflows for ES/PT-BR `NO RETURN PATH` (**309.0 / 328.4 px**) and RU `IDLE` (**326.8 px**; RU `NO RETURN PATH` already shortened 342.8→222.9 px), and the metric must move to its own row | drop the multiplier; put the metric on its own row; **shorten the remaining over-budget words to ≤276 px at 30 px** (recommended, §4.4 item 4) — fallback 24/25 px effective size or a two-line hero priced against the floor |
-| 2 | action label shrink to a 9 px floor (`ledger.rs:81-88`) | 4/15 locale/label pairs render at 11.6–12.6 px | §4.4 |
+| 1 | `STATE * 0.82` (`app.rs:2161`) always taken (`narrow` is always true at 320 px) | state word renders at 24.6 px, not 30; 2.0 px baseline drift vs the metric; at the mandated `STATE` 30 px **two current-tree words fail** — DE `OPTIMIERUNG LÄUFT` **317.4 px** (cap + rail) and RU `НЕ ОПТИМИЗИРУЕТСЯ` **315.7 px** (idle, retires with A2). The landed/proposed short copy measures RU 211.7 / ES 204.2 / PT-BR 218.9 (§4.6 erratum; the old 342.8/309.0/328.4 figures were broken-parser reads of HEAD strings), and the metric must move to its own row | drop the multiplier; put the metric on its own row; **land the DE `OPTIMIERUNG` copy and keep every word ≤276 px at 30 px** (§4.4 item 4) — fallback 24/25 px effective size or a two-line hero priced against the floor |
+| 2 | action label shrink to a 9 px floor (`ledger.rs:81-88`) | **6/27 locale/label pairs exceed the 296 px single-line budget** (all `action.restart_admin_optimize`; corrected §4.6 — the recorded 4/15 was a broken-parser count); the FR label also wraps to 3 lines at 264 px | §4.4 |
 | 3 | `hero_h = 34.0` inline (`app.rs:2153`) | 40 px content row in a 34 px allocation | `HERO_H = 40.0` |
 | 4 | `VALUE` (17 px) has no call site (`theme.rs:199` only) | the mono role in use is whatever `TextStyle::Monospace` yields plus the 30 px metric; 17 px mono is dead as a named role | either wire it for ledger data values or collapse `VALUE` into a named use; do not leave a role with no call site |
+
+### 4.6 Measurement erratum (2026-11-21): the W1/W2 width figures came from a broken parser
+
+**Everything in §4.2, §4.4 (the two measured tables) and §4.5 that sums advances
+was measured with `wat/evidence/2026-11-19/team/design-system/fonts.py`, whose
+cmap format-4 decoder reads the `idRangeOffset` glyphIdArray at an absolute file
+offset instead of a subtable-relative one** (`_u16_at(addr)` where the offset is
+subtable-relative; the `sub +` is missing). Every character in an
+`idRangeOffset != 0` segment therefore got an arbitrary glyph id from elsewhere
+in the file: Inter-SemiBold `S` mapped to gid **400** instead of the real gid
+**90**, the Inter cmap held **212** entries instead of **230** (the 18 dropped
+ones included `y` and `{` — the origin of the phantom "Inter lacks `y`/`{`"
+claim corrected in §8.2), and all 14 measured faces disagree with fontTools.
+**The recorded numbers reproduce exactly from that parser at the mandated
+sizes** (DE `OPTIMIERUNG LÄUFT` 275.1 px at 30 px, DE `OPTIMIERUNG` 167.2 px,
+RU `НЕТ ОБРАТНОГО ПУТИ` 342.8 px); there was no 26 px basis in the script
+(`state_token` is 30.0). Row heights are **not** affected: they read
+`head`/`hhea`/`OS/2`, and all eight §4.1 rows recompute identically.
+
+**Corrected method.** fontTools, per-character advance from the first installed
+chain face that draws it × role px / unitsPerEm, uppercase, greedy word wrap at
+the named column; chains per `theme.rs`, roles per `design.rs`. It reproduces
+the independent Q15/Q20 re-measurement exactly (DE `OPTIMIERUNG LÄUFT` 317.4,
+`OPTIMIERUNG` 211.6). Full tables:
+`wat/evidence/2026-11-21/wf081b-measurements/corrected-measurements.md`.
+
+**Corrected state words at `STATE` 30 px** (worst word per locale, all eight
+`state.*` keys × nine locales measured; cap ≤276, rail 288):
+
+| locale | worst key | word | corrected @30 | recorded before | verdict |
+|---|---|---|---|---|---|
+| de | `state.optimizing` | `OPTIMIERUNG LÄUFT` | **317.4** | 275.1 | **FAIL cap + rail** |
+| en | `state.not_returning` | `NO RETURN PATH` | **266.3** | (EN worst was tabulated 221.1) | pass, 9.7 px slack |
+| es | `state.disconnected` | `DESCONECTADO` | **253.9** | — | pass |
+| fr | `state.not_returning` | `AUCUN RETOUR` | **240.7** | — | pass |
+| ja | `state.idle` | `最適化していません` | **270.0** | 270.0 | pass, 6.0 px (retires with A2) |
+| ko | `state.not_returning` | `NO RETURN PATH` | **266.3** | — | pass, 9.7 px |
+| pt-BR | `state.disconnected` | `DESCONECTADO` | **253.9** | — | pass |
+| ru | `state.idle` | `НЕ ОПТИМИЗИРУЕТСЯ` | **315.7** | 326.8 | **FAIL cap + rail** (retires with A2) |
+| zh-Hans | `state.not_returning` | `NO RETURN PATH` | **266.3** | — | pass, 9.7 px |
+
+**2 of 72 words fail the cap, both also over the 288 px rail:** DE
+`OPTIMIERUNG LÄUFT` 317.4 (the copy fix is **required**, not optional — the
+recorded "passes by 0.9 px" was false) and RU `НЕ ОПТИМИЗИРУЕТСЯ` 315.7 (the
+`idle` row is retired by A2). The other recorded overflows were HEAD strings
+already replaced: corrected RU `НЕТ ВОЗВРАТА` **211.7** (recorded 222.9), ES
+`SIN RETORNO` **204.2** (176.8), PT-BR `SEM RETORNO` **218.9** (178.7), RU
+`НЕ ПОДКЛЮЧЕНО` **256.8** (268.0), RU `НЕ АКТИВНО` **182.8** (193.9) — all
+pass. Thin passes: `NO RETURN PATH` 266.3 (EN/ja/ko/zh), ja idle 270.0, DE
+`NICHT OPTIMIERT` 267.0, EN `NOT CONNECTED` 263.8.
+
+**Corrected action labels at `EMPHASIS` 15 px, 264 px column:**
+
+| key | worst locale | corrected width | lines | recorded before |
+|---|---|---|---|---|
+| `action.stop_optimizing` | ru | **220.1** | 1 | 225.7 |
+| `action.optimize_route` | ru | **215.1** | 1 | 220.7 |
+| `action.restart_admin_optimize` | de | **424.0** | 2 | 383.0 |
+| `action.restart_admin_optimize` (landed RU copy) | ru | **340.2** | 2 | 356.9 |
+
+`restart_admin_optimize` line counts: ja/ko/zh-Hans 1 line; en/de/es/pt-BR/ru 2
+lines; **fr `REDEMARRER EN ADMINISTRATEUR POUR OPTIMISER` 396.9 px → 3 lines**
+(adding `OPTIMISER` to line 2 needs 268.7 px > 264), where the recorded table
+claimed no 3-line locale. 6 of 27 locale/label pairs exceed both the old 296 px
+and the corrected 264 px single-line budget (all restart labels). Q15's outcome
+is unchanged (RU is 340.2 px, 2 lines, no 73 px slot); **FR is a new
+decision**: shorten the FR copy or approve a chrome change — the 3-line label
+must not ship inside `ACTION_H_WRAPPED` 56.
+
+**Corrected §4.4 copy-wrap lines** (recorded → corrected; only rows that
+changed): `route.relay_not_returning` EN 3 → **4** (worst de 4);
+`route.injection_failed_warning` worst de 4 → **3**; `settings.starvation_policy`
+EN 5 → **4**, worst 6 → **4** (de); `route.location_hosting_hint` worst fr 3 →
+**2** (de); `route.location_geofeed` worst 2 → **1**;
+`route.server_leg_relay_measured` worst ru 2 → **3**;
+`route.server_leg_relay_measured_unvalidated` EN 2 → **3**, worst ru 3 → **3**
+(de); `route.expected_path` EN 1 → **2**. Unchanged rows keep their recorded
+values. No measured maximum is breached: the banner and the policy paragraph
+stay within §6.10's four-line frame, and ledger values keep their growing row.
+
+**Verified unaffected:** the eight §4.1 row heights (identical), the §8.3
+symbol-policy primary faces (all rows match with fontTools), and the §8.1/§8.2
+face/catalog coverage (already re-measured in the Q19 font tranche; this parser
+bug is the cause of the old 212/619 figures there).
+
+**Method limit (named):** these are raw advances, not a rasterised render. The
+bundled Inter/JetBrains/CJK faces have no GPOS (Q19 drops it), so advances are
+the shaped width for them; Ubuntu-Light's Cyrillic kerning is not modelled. The
+documented ±2 px tolerance covers this; the W2-2 T21 real-window capture remains
+the rendered proof.
 
 ---
 
@@ -864,9 +956,12 @@ square is painted (no bundled face draws `■`, §8.3) and appears only while
 264 px label column, and the slot uses `ACTION_H_WRAPPED` 56 when the label wraps
 (two `EMPHASIS` rows = 38 px + 2 × S2 = 54, rounded to 56). One measured
 exception is now resolved by the landed RU copy: the RU restart label was
-3 lines at HEAD and is 2 lines (356.9 px) with `ux-lead`'s landed `ru.toml`
-string, so the two-line slot covers every locale; the 73 px option is priced out
-(§4.4) — the type is never shrunk.
+3 lines at HEAD and is 2 lines (**340.2 px** corrected, §4.6) with
+`ux-lead`'s landed `ru.toml` string. **The slot does not cover every locale
+yet: FR's `REDEMARRER EN ADMINISTRATEUR POUR OPTIMISER` wraps to 3 lines at
+264 px (396.9 px, §4.6)** — shorten the FR copy or get an owner decision for a
+chrome change; the 73 px three-line option is priced out (§4.4) — the type is
+never shrunk.
 
 ### 6.3 Combo (`egui::ComboBox`; three sites: relay `app.rs:2921`, game
 `app.rs:3007`, language `app.rs:3354`)
@@ -993,7 +1088,7 @@ fabricated city or latency.
 | 8 | Major | disabled action vs ready action fill contrast 2.77:1 (state is carried by ink + block, so not colour-only, but the fill cue is below 3:1) | §3.3 |
 | 9 | Major | dense proxy row cannot contain its own control (16 px allocation, 40 px control minimum) | `app.rs:3808`, `theme.rs:189` |
 | 10 | Minor | update failure line is plain text_1, not danger | `app.rs:3938` (line moved on master `76aba5d`) |
-| 11 | Critical | at the mandated `STATE` 30 px the current tree overflows the 288 px rail for PT-BR `NO RETURN PATH` (328.4 px), RU `IDLE` (326.8 px) and ES `NO RETURN PATH` (309.0 px); DE `OPTIMIZING` 275.1 px is inside the ≤276 px acceptance cap by 0.9 px (passes); RU `NO RETURN PATH` is already shortened (342.8→222.9 px). The metric must move to its own row too (word + S2 + metric ≥366 px even at 24.6 px). Recommended remedy: shorten the remaining over-budget words to ≤276 px at 30 px; fallbacks priced in §4.4 item 4 | `app.rs:2153-2181`; `delta-copy.md` §5; fix under §4.4 item 4 (W2 shell owner) |
+| 11 | Critical | at the mandated `STATE` 30 px **two current-tree words fail the fit**: DE `OPTIMIERUNG LÄUFT` **317.4 px** (over the ≤276 cap and the 288 px rail) and RU `НЕ ОПТИМИЗИРУЕТСЯ` **315.7 px** (idle, retires with A2). The previously recorded ES/PT/RU overflow figures (309.0 / 328.4 / 326.8) were HEAD strings measured with a broken parser; the landed/proposed short copy measures RU 211.7 / ES 204.2 / PT-BR 218.9, all passing (§4.6). The metric must move to its own row too (word + S2 + metric ≥366 px even at 24.6 px). Remedy: land the DE `OPTIMIERUNG` copy and keep every word ≤276 px at 30 px; fallbacks priced in §4.4 item 4 | `app.rs:2153-2181`; `delta-copy.md` §5 (superseded by §4.6); fix under §4.4 item 4 (W2 shell owner) |
 | 12 | Major | the starvation banner copy is 3 lines EN / 4 lines worst locale in its 248 px column, not the 1–2 line target; the shipped frame grows to 64–80 px in the card | `client-gui/locales/en.toml:184-185`; `app.rs:2261-2277`; contract §6.10 |
 
 ### 6.10 Notice / warning line (new component contract; shipped by master `76aba5d`)
@@ -1482,7 +1577,9 @@ are `file:line`.
       words land** (spec §1.4/§6), and the DE capture covers the long-copy rows;
       verify no state-word/metric occlusion, that each long string wraps rather
       than shrinking, and that every landed locale's state word measures ≤276 px
-      at 30 px (§4.4 item 4).
+      at 30 px (§4.4 item 4). **This gate is currently blocked by DE
+      `OPTIMIERUNG LÄUFT` (317.4 px) until the Q20 copy lands (§4.6);** the
+      re-measured values replace the recorded ones.
 - [ ] A contrast test in the crate (not just this document) so the floors cannot
       regress.
 - [ ] A **state-word fit gate, verified by the evidence measurement**: the
@@ -1538,20 +1635,25 @@ are `file:line`.
    are closed by the regenerated, pinned subsets (§8.2,
    `client-gui/assets/fonts/README.md`).
 7. **RU restart action copy — resolved by landed copy.** `ux-lead`'s
-   `ru.toml` string (`Перезапустить от имени администратора`) measures 356.9 px
-   = 2 lines at 264 px (HEAD was 518.6 px = 3 lines), so the action band stays
-   72 px and the 239/181 compact worst is unchanged; the 73 px three-line slot is
-   priced out. The dropped "to optimize" purpose must be carried elsewhere by the
-   spec/copy owner (flagged); the type is never shrunk.
+   `ru.toml` string (`Перезапустить от имени администратора`) measures
+   **340.2 px** (corrected, §4.6) = 2 lines at 264 px (HEAD was 518.6 px = 3
+   lines), so the action band stays 72 px and the 239/181 compact worst is
+   unchanged; the 73 px three-line slot is priced out. **FR is now the only
+   restart label that wraps to 3 lines (396.9 px, §4.6) — it needs shortened
+   copy or a chrome decision.** The dropped "to optimize" purpose must be
+   carried elsewhere by the spec/copy owner (flagged); the type is never shrunk.
 8. **Rail collision + 30 px state word (F1)** — the metric moves to its own row
-   (mandatory), and the **recommended remedy is shortening the remaining
-   over-budget state words to the proposed acceptance cap ≤276 px at `STATE`
-   30 px** (`ux-lead`; ES `SIN RETORNO`, PT-BR `SEM RETORNO`, RU `IDLE`
-   contingency, optional DE `OPTIMIERUNG`; RU `NO RETURN PATH` already landed at
-   222.9 px). It keeps the 30 px role, the hero band and the 239/181 compact
-   budget. Fallbacks: a 24/25 px effective word size (type role departs from 30)
-   or a two-line hero priced at 275 chrome → 145 scroll, below the 180 floor —
-   needs an owner-approved floor change. §4.4 item 4, §6.9 gap 11.
+   (mandatory), and the **remedy is the DE copy fix plus the ≤276 px acceptance
+   cap at `STATE` 30 px**: corrected measurement (§4.6) shows **DE
+   `OPTIMIERUNG LÄUFT` 317.4 px fails** — the Q20/`ux-lead` copy
+   `OPTIMIERUNG` (211.6 px) is **required** — and RU `НЕ ОПТИМИЗИРУЕТСЯ`
+   315.7 px fails but retires with A2. The landed/proposed short strings
+   measure RU `НЕТ ВОЗВРАТА` 211.7, ES `SIN RETORNO` 204.2, PT-BR `SEM RETORNO`
+   218.9, RU `НЕ ПОДКЛЮЧЕНО` 256.8 — all pass. It keeps the 30 px role, the
+   hero band and the 239/181 compact budget. Fallbacks: a 24/25 px effective
+   word size (type role departs from 30) or a two-line hero priced at 275
+   chrome → 145 scroll, below the 180 floor — needs an owner-approved floor
+   change. §4.4 item 4, §4.6, §6.9 gap 11.
 
 ---
 
@@ -1568,26 +1670,30 @@ observed in a running window. The honest list:
   pixels-per-point, not measured from a laid-out galley. At 125/150/200 % each
   `round_ui` term rounds to a different step, so a row can move ±1 px.
 - **Label widths and wrap-line counts are raw `hmtx` advances** through the
-  installed font chain (`delta-copy.py`); epaint shapes with `harfrust`
-  (GSUB/GPOS), so kerning can move a line by a couple px and, at a word boundary,
-  change a line count by one. The budget margins are stated with that tolerance.
+  installed font chain. They were re-measured with fontTools on 2026-11-21
+  (§4.6) because the original `delta-copy.py`/`fonts.py` numbers used a broken
+  cmap parser; epaint shapes with `harfrust` (GSUB/GPOS), but the bundled
+  Inter/JetBrains/CJK faces carry none (Q19 drops GPOS), so only Ubuntu-Light's
+  Cyrillic kerning is unmodelled. A word boundary can therefore move a line by
+  one; budget margins are stated with the ±2 px tolerance.
 - **The banner/location/trace line counts** are computed for the nine catalogs
   with sample placeholder values (3-digit ms, 5-digit seconds, a long provider
   and place name); they are not sampled from a rendered window and no live
   starvation session was observed in the delta round.
-- **The face-identity finding** (`y`, `{`, JBMono's missing ASCII) is measured
-  from the bundled cmaps, not observed in a window; the byte-exact rendered mix
-  should be confirmed with a screenshot at W2.
+- **The face-identity finding was a measurement error** (§8.2, §4.6): the old
+  parser dropped 18 Inter cmap entries (including `y` and `{`), so "Inter lacks
+  `y`/`{`" and "JBMono lacks ASCII" never existed — the shipped faces carry all
+  printable ASCII and Inter all of Latin-1. The bytes are measured from the real
+  tables; a rendered window is still the final confirmation.
+- **The native-name tofu** was closed by Q19 (§8.2): `국`/`简`/`体` are now in
+  the bundled KR/SC faces, so the picker no longer depends on the system-font
+  discovery provider.
 - **Dynamic states were not observed:** boosting, fallback, the watchdog
   re-tests, sheet focus confinement, AccessKit output, reduced motion (there is
   none), 200 % scaling, and the macOS/Linux OS signals. They are specified, not
   proven.
 - **The shipped 16 px proxy row** is code-measured (allocation vs egui's 40 px
   control minimum); the overlap it causes was not screenshot-verified this round.
-- **The native-name tofu** is font-table-measured; on Windows the system-font
-  discovery provider is likely to render those glyphs, so the defect is
-  device-dependent. It is still a defect because the bundled fonts are the only
-  guarantee.
 - **AAA counts** are reported for completeness; the canon claims AAA only for
   primary ink.
 
