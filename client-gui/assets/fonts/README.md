@@ -37,10 +37,12 @@ command was not.
 ## The CJK subsets are generated, never hand-edited
 
 The three Noto faces ship as small subsets rather than the ~28 MB full fonts:
-the nine locales plus the language picker need 620 distinct non-ASCII
-characters, and a subset of the characters the UI can actually emit keeps the
-binary lean. **Do not edit an `.otf` by hand** — it has no reproducible
-provenance and the coverage/hash gate will reject it.
+the nine catalogs ∪ the language picker need **620 distinct non-ASCII
+characters** (617 catalog characters; the picker contributes only the three new
+ones, `국`/`简`/`体`). The ten faces in this directory draw **570** of them; the
+remaining **50 Cyrillic codepoints** of `ru` resolve to epaint's built-in
+Ubuntu-Light, which is not in this directory. **Do not edit an `.otf` by hand** —
+it has no reproducible provenance and the coverage/hash gate will reject it.
 
 Regenerate them with the pinned pipeline:
 
@@ -80,8 +82,9 @@ Pipeline facts (all pinned in the script and the manifest):
   `head.modified` keeps the source value instead of the wall clock. Run
   `--write` twice and the files are byte-identical.
 
-`--check` needs neither fontTools nor network, so CI could run it, but it is a
-developer/agent gate today; the durable runtime gate is the Rust test
+`--check` needs neither fontTools nor network, so CI could run it, but **it is
+not wired into CI yet** — it is a manual/evidence-only gate today (run it by hand
+before committing an asset change). The durable runtime gate is the Rust test
 `every_catalog_glyph_is_drawable_in_every_family` plus
 `the_language_picker_names_draw_ink_in_every_family` in
 `client-gui/src/app/tests.rs`, which reads the real installed `FontDefinitions`.

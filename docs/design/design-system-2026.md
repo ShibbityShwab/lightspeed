@@ -1224,9 +1224,12 @@ CJK.
 
 ### 8.2 Catalog coverage (measured)
 
-**617 unique non-ASCII characters** across the nine catalogs plus **19 unique
-non-ASCII characters** in the picker's nine `native_name` strings — 620 total —
-and the chains draw **all 620 with zero bundled tofu**. The distribution:
+**617 distinct non-ASCII characters** across the nine catalogs ∪ **19 distinct
+non-ASCII characters** in the picker's nine `native_name` strings = **620
+distinct characters**; the picker contributes exactly the three that are new
+(`국`, `简`, `体`). Of the 620, **570 are drawn by the ten bundled asset faces**
+and **50 Cyrillic codepoints** (all of `ru`) by epaint's built-in
+**Ubuntu-Light**; the chains draw all 620 with zero tofu. The distribution:
 
 - **Inter is the primary face for every Latin character.** It carries all
   printable ASCII and Latin-1 (soft hyphen U+00AD is the one exception, and no
@@ -1238,9 +1241,10 @@ and the chains draw **all 620 with zero bundled tofu**. The distribution:
   measurement-script error. (`fonts-and-glyphs.md` §4 carries the old read and
   is superseded here.)
 - **Cyrillic (`ru`) has no bundled Latin face.** Inter's subset is Latin-only,
-  so Russian resolves to epaint's builtin **Ubuntu-Light** (1194 codepoints).
-  That is a type-consistency fallback, not tofu, and is accepted — unchanged by
-  Q19.
+  so the 50 Cyrillic catalog codepoints — the only required characters that no
+  face in `client-gui/assets/fonts` draws — resolve to epaint's built-in
+  **Ubuntu-Light** (1194 codepoints). That is a type-consistency fallback, not
+  tofu, and is accepted — unchanged by Q19.
 - **CJK (`ja`/`ko`/`zh-Hans`)** comes from the three Noto faces, ordered by
   locale. **`→` U+2192 is the one typed mark Inter lacks**; it resolves to the
   CJK face, so the paint-it rule in §8.3 stands.
@@ -1325,7 +1329,9 @@ swapped, subsetted or a locale picks a different CJK order.
   regenerates them from a pinned OFL source (byte-reproducible) and `--check`
   verifies hashes and coverage against `client-gui/assets/fonts/subset.json`;
   sources, tooling, licence and the full character policy are documented in
-  `client-gui/assets/fonts/README.md`.
+  `client-gui/assets/fonts/README.md`. **`--check` is not wired into CI yet** —
+  it is a manual/evidence-only gate today; the durable gates are the two Rust
+  tests above.
 - No new font family without a licence, a role and the cmap gate (owner
   decision). The bundled faces are Inter (OFL), JetBrains Mono (OFL) and Noto CJK
   (OFL) — zero-cost and redistributable.
@@ -1622,7 +1628,7 @@ All under `wat/evidence/2026-11-19/team/design-system/` unless stated; the
 | file | content |
 |---|---|
 | `contrast.py` / `contrast-results.md` | contrast method, token values and composited tints, 41 text pairings + 20 non-text claims with ratios/verdicts (re-run on the master delta adds the notice/trace rows), proposed values (`border_control` search, focus ring, selection fix), composite states, method cross-check |
-| `fonts.py` / `fonts-and-glyphs.md` | installed font chains, face coverage, candidate-symbol coverage, 619 catalog chars (re-run on the delta), native-name gap, missing-glyph audit (`y`, `{`), measured row heights, rail row fit, localisation budgets |
+| `fonts.py` / `fonts-and-glyphs.md` | installed font chains, face coverage, candidate-symbol coverage; the catalog-char count was re-measured on 2026-11-21 as **617** (the delta's read said 619), and its missing-glyph audit (`y`, `{`) was a **measurement error** — the faces carry full printable ASCII (§8.2). Also: native-name gap, measured row heights, rail row fit, localisation budgets |
 | `token_audit.py` / `token-usage.md` | per-token use counts and sites (semantic filter documented), dead/theme-only/shadowed tokens, the five inline literals |
 | `token-usage-raw.txt` | raw first-pass scan (includes the comment/macro noise the filtered audit removes) — kept so the filter's effect is auditable |
 | `revision-r2.md` | QA review r1 finding → change map (R6, R11, R17, R5), with before/after numbers and the re-run record |
