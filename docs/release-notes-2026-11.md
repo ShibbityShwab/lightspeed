@@ -1,13 +1,14 @@
 # LightSpeed release notes — November 2026 (DRAFT)
 
-> **Status: draft, not a release.** Prepared 2026-11-21; updated after the
-> owner-selected **Direction C "Broadcast console"** redesign was implemented and
-> merged (PR #196). The version **1.12.0** was selected by the owner on
-> 2026-11-21 (SemVer minor for the new desktop interface), but **no tag, publish,
-> package bump or dispatch has happened** — the release remains an owner gate.
-> The GitHub release body is the `CHANGELOG.md` version section extracted verbatim
-> by `infra/scripts/release-notes.sh`; this page is the announcement bullet list
-> plus the honest verification statement, not the release body itself.
+> **Status: PUBLISHED 2026-11-21.** LightSpeed **1.12.0** is live at
+> [github.com/ShibbityShwab/lightspeed/releases/tag/v1.12.0](https://github.com/ShibbityShwab/lightspeed/releases/tag/v1.12.0)
+> with 39 assets (CLI/GUI tarballs, MSI/zip, installers, update packages,
+> `sha256.sum`). The GitHub release body is the `CHANGELOG.md` 1.12.0 section;
+> this page is the announcement bullet list plus the verification statement.
+> Channel state: AUR `lightspeed-bin 1.12.0-1`, Scoop bucket 1.12.0, Homebrew
+> formula 1.12.0, Chocolatey source/manifests 1.12.0 (nupkg pushed; community-feed
+> moderation is external), winget still awaiting the owner bootstrap PR #481953.
+> No further tag or publish is needed for 1.12.0.
 
 ## Highlights
 

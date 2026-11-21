@@ -4,6 +4,16 @@
 > asked for ("why are we not on choco, winget, AUR etc"): what each channel
 > serves today, which part is automated, and which step still needs the owner.
 > Re-verify a row with the commands at the bottom before quoting it.
+>
+> **2026-11-21 update (v1.12.0 published):** GitHub Releases 1.12.0 (39 assets,
+> published 2026-11-21); Homebrew formula 1.12.0; Chocolatey source/manifests
+> 1.12.0 and the `.nupkg` push submitted (community-feed moderation is external);
+> Scoop bucket serves 1.12.0; AUR `lightspeed-bin 1.12.0-1`; winget remains
+> unpublished pending the owner bootstrap PR
+> [microsoft/winget-pkgs#481953](https://github.com/microsoft/winget-pkgs/pull/481953).
+> The table rows below are the 2026-11-18 snapshot; the tag's auto-bump jobs were
+> blocked by master protection and the same bumps were merged through PR #198,
+> after which the release run completed green.
 
 All channels are free community infrastructure; the owner's cost is **$0.00**.
 

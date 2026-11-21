@@ -12,6 +12,18 @@
 
 ## Recent entries
 
+### 2026-11-21 (Release 1.12.0) - v1.12.0 tagged and published; Broadcast console shipped
+
+**Agent:** lead, after explicit owner approval to tag/publish 1.12.0.
+
+- **Tag + GitHub Release:** annotated `v1.12.0` on `ee2fbbf`; release workflow `44898587686` published **[v1.12.0](https://github.com/ShibbityShwab/lightspeed/releases/tag/v1.12.0)** with **39 assets** (CLI/GUI tarballs, MSI/zip, installers, update packages, `sha256.sum`) at 2026-11-21 11:33Z. The release body is the 1.12.0 changelog section.
+- **Post-release channel jobs:** the tag's first attempt failed on the auto-bump jobs because master is protected (their direct `git push origin HEAD:master` was rejected). The same manifest bumps were committed through **PR #198** (merged `58f822f`) using the published `sha256.sum`: Formula, Chocolatey nuspec/install, Scoop manifest, AUR PKGBUILD/.SRCINFO. A rerun of all failed jobs then completed the release run **green** (bump-homebrew/chocolatey/scoop, publish-scoop, publish-aur, verify-bumps all success).
+- **Channel state verified:** AUR `lightspeed-bin` cloned at **1.12.0-1**; Scoop bucket `bucket/lightspeed.json` at **1.12.0**; Homebrew formula and Chocolatey source at **1.12.0**; Chocolatey `.nupkg` push submitted (feed moderation is external). winget remains an open owner bootstrap PR (#481953), unchanged.
+- **State/docs:** CHANGELOG 1.12.0 describes the Broadcast console redesign; release notes marked published; this record + decision log updated. $0.00 spend.
+
+**Verified:** release published with 39 assets; release workflow green after the channel rerun; AUR/Scoop/Formula/Choco versions checked; master CI for the bump merge. **Not verified:** Chocolatey moderation/listing (external), winget bootstrap (owner PR), 200 %/macOS/Linux runtime, live judged starvation/error.
+**Open:** winget bootstrap PR #481953; smoke promotion after 10 genuine greens; post-W2 tasks 88/73; runtime hardware.
+
 ### 2026-11-21 (Redesign) - Direction C "Broadcast console" accepted by owner, implemented, reviewed, merged (PR #196)
 
 **Agent:** lead + design-system-2 (visual directions/tokens/review), ux-lead-2 (UX/IA review), interface-designer-2 (implementation), qa-engineer-2 (independent verification).
