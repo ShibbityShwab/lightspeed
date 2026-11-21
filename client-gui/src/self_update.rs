@@ -13,12 +13,25 @@
 //! copies the new exe over the current one, verifies the copy by size, and
 //! relaunches. The calling process exits after the hand-off.
 
+// `Path` (and the checksum/elevation imports below) are used only by the
+// Windows in-place path: the non-Windows branch of `install_blocking` refuses
+// before it needs a path, a checksum or an elevated script. Each import is
+// Windows-conditional so `-D warnings` stays clean on the Linux/macOS builds; the
+// module itself stays compiled on every target.
+#[cfg(windows)]
 use std::path::Path;
 
+/// The checksum verification below runs only on the Windows in-place path, so
+/// these imports are Windows-conditional: non-Windows builds return before any
+/// download (see [`install_blocking`]) and would otherwise fail `-D warnings`
+/// on unused imports. The module stays compiled on every target.
+#[cfg(windows)]
 use sha2::{Digest, Sha256};
 
 // The checksum parser is a pure update rule and lives in the shared core
 // (WF-081 W2-3b S6); network, download verification and elevation stay here.
+// Windows-conditional for the same reason as the `sha2` import above.
+#[cfg(windows)]
 use lightspeed_client::app::update::parse_sha256_file;
 
 use crate::update::ReleaseAsset;
@@ -116,6 +129,13 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
 /// current one, verify the copy landed by size, relaunch. Also refreshes
 /// WinDivert files when the archive carries them (the manual install layout
 /// keeps them beside the exe).
+///
+/// Windows-only: `install` (and therefore this script) is behind
+/// `#[cfg(windows)]`, and a non-Windows build refuses the install before it
+/// would ever build a script. Gated rather than `allow(dead_code)` so the
+/// function does not exist where it cannot run; its contract test is gated the
+/// same way.
+#[cfg(windows)]
 fn swap_script(zip: &Path, dest_dir: &Path, exe_name: &str) -> String {
     let zip = zip.display();
     let dest = dest_dir.display();
@@ -154,7 +174,9 @@ fn spawn_elevated(script: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
+/// The swap-script contract test is Windows-only by construction: the script
+/// (and the elevated install path it belongs to) does not exist elsewhere.
+#[cfg(all(test, windows))]
 mod tests {
     use super::swap_script;
     use std::path::Path;
@@ -179,5 +201,30 @@ mod tests {
                 "script missing {needle:?}\n{script}"
             );
         }
+    }
+}
+
+/// The mirror test for the honest non-Windows path: the installer must refuse
+/// before downloading anything and name the package-manager route. It exists
+/// only off Windows, where the refusal branch is the whole implementation, so
+/// the platform-conditional test count is the same on every OS.
+#[cfg(all(test, not(windows)))]
+mod non_windows_tests {
+    use super::install_blocking;
+    use crate::update::ReleaseAsset;
+
+    fn asset() -> ReleaseAsset {
+        ReleaseAsset {
+            tag: "v1.1.4".into(),
+            zip_url: "https://example.invalid/gui.zip".into(),
+            sha256_url: "https://example.invalid/gui.zip.sha256".into(),
+        }
+    }
+
+    #[test]
+    fn a_non_windows_install_is_refused_with_the_package_manager_instruction() {
+        let message = install_blocking(asset()).expect_err("in-place install must be refused");
+        assert!(message.contains("Windows"), "{message}");
+        assert!(message.contains("package manager"), "{message}");
     }
 }

@@ -24,6 +24,15 @@ pub enum Animations {
     /// OS animations are explicitly enabled.
     On,
     /// Reduced motion is requested: never animate.
+    ///
+    /// Platform-conditional exemption: the only wire that can produce `Off`
+    /// today is the Windows `SPI_GETCLIENTAREAANIMATION` probe, so non-Windows
+    /// builds never construct it (the macOS/Linux sources are named gaps that
+    /// return `Unknown`). The variant stays part of the shared vocabulary —
+    /// those sources will map to it when wired — and the unit tests pin its
+    /// static behaviour on every target. The exemption is local to this variant
+    /// (no module-wide allowance) and vanishes when a second source lands.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Off,
     /// No OS signal is wired (or the read failed): never animate.
     Unknown,
@@ -41,6 +50,14 @@ impl Animations {
     /// `enabled` is the value written by `SPI_GETCLIENTAREAANIMATION`, where
     /// non-zero means client-area animation is **enabled**. A failed query is
     /// `Unknown` (static), never an accidental `On`.
+    ///
+    /// Platform-conditional exemption: the decoder is Windows-only by
+    /// construction — it exists to decode that API's `BOOL`/value pair — so
+    /// non-Windows builds have no caller. It is kept on every target because
+    /// the cross-platform tests pin the polarity (a failed query must never
+    /// read as `On`) and because it is the shape a future macOS/Linux source
+    /// will follow. Local exemption, not a module-wide allowance.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn from_windows_flag(call_ok: bool, enabled: i32) -> Self {
         if !call_ok {
             return Self::Unknown;

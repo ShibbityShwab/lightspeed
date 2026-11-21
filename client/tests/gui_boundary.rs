@@ -400,7 +400,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-3b S6: the default-features update check moved to
     // `lightspeed_client::app::update`; this file keeps the download,
     // `sha2` verification and the elevated swap script. 213 -> 183.
-    ("client-gui/src/self_update.rs", 183),
+    // W2-4 CI fix (2026-11-21): the Windows-only imports and swap script are
+    // `#[cfg(windows)]`-gated and a non-Windows install-honesty test was added,
+    // so the platform compiler is clean under `-D warnings`; 183 -> 230.
+    ("client-gui/src/self_update.rs", 230),
     // W2-3b S5a: the location ladder, its three indexes and its classifier moved
     // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
     // for the one helper the frozen route surface renders. 595 -> 11.
@@ -414,7 +417,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // keymap, the Windows tray presentation and the updater channel decision.
     // Added deliberately with measured budgets; the modules are platform
     // integration (GUI-owned by the skill), not the shared core.
-    ("client-gui/src/platform/animations.rs", 104),
+    // W2-4 CI fix (2026-11-21): the Windows-only `Off` variant and
+    // `from_windows_flag` carry documented `cfg_attr(not(windows))` exemptions
+    // (local to each item); 104 -> 121.
+    ("client-gui/src/platform/animations.rs", 121),
     ("client-gui/src/platform/autostart.rs", 433),
     ("client-gui/src/platform/elevation.rs", 421),
     ("client-gui/src/platform/shortcuts.rs", 413),
