@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-21
+
+### Fixed
+
+- **Changing relays no longer tears down and recreates WinDivert.** The GUI
+  restarted the whole interceptor on every relay selection, even though the
+  tunnel task already reads `session::current_proxy()` for each outbound
+  datagram. Reopening the WinDivert handles could leave the driver's WFP
+  provider/sublayers registered, so the next start failed with
+  `FWP_E_IN_USE` / "receive handle is invalid" after two relay switches. Relay
+  selection now only reconnects the control plane and publishes the new proxy;
+  the existing interceptor follows it without reopening the driver. The CLI's
+  `switch_relay` path already worked this way.
+
 ## [1.12.1] - 2026-11-21
 
 ### Fixed

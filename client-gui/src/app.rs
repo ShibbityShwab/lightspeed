@@ -788,50 +788,19 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let addr = entry.addr;
         let node_id = entry.node_id.clone();
-        let was_intercepting = match self.commands.select_relay(addr, node_id) {
-            Ok(was_intercepting) => was_intercepting,
-            Err(error) => {
-                tracing::error!("relay connect command failed: {error:?}");
-                return;
-            }
-        };
+        // `select_relay` reconnects the control plane and publishes the new
+        // relay through `session::current_proxy()`. The WinDivert tunnel task
+        // reads that value for every outbound datagram, so the data plane moves
+        // with the selection. Restarting interception here would tear down and
+        // recreate the WinDivert handles for no reason, and repeated relay
+        // switches could then hit the driver's stale WFP objects.
+        if let Err(error) = self.commands.select_relay(addr, node_id) {
+            tracing::error!("relay connect command failed: {error:?}");
+            return;
+        }
         // The DTO's `connecting` fact: this window asked for the link, and the
         // engine's own facts end the attempt (see `poll_health`).
         self.connect_attempt = Some(addr);
-        // Any relay change moves the data plane with it: a switch that only
-        // reconnects the control plane leaves the interceptor sending to the
-        // old relay while the token belongs to the new one.
-        if was_intercepting {
-            self.restart_interceptor_on_selected_relay();
-        }
-    }
-
-    /// Move a running interceptor onto the relay the follow just selected.
-    ///
-    /// `connect_selected` reconnects the control plane only. The data plane is
-    /// a separate socket created with the proxy address at start time, so
-    /// without this restart the game keeps sending to the old relay while the
-    /// session token belongs to the new one, and the old relay rejects every
-    /// packet. The hold is deliberately not re-armed: the server is locked and
-    /// its relay is already chosen, so the new interceptor should relay at once.
-    fn restart_interceptor_on_selected_relay(&mut self) {
-        let Some(proxy) = self.selected_proxy_addr() else {
-            return;
-        };
-        let game_key = self.selected_game().key;
-        let port_range_override = parse_custom_port_range(&self.custom_port_input);
-        let process_target = self.target_process.clone();
-        match self.commands.start_boost(
-            &game_key,
-            proxy,
-            self.fec_enabled,
-            4, // default FEC K
-            port_range_override,
-            process_target,
-        ) {
-            Ok(()) => tracing::info!("Restarted interception on the new relay {proxy}"),
-            Err(error) => tracing::error!("relay switch could not restart interception: {error:?}"),
-        }
     }
 
     fn start_discovery(&mut self) {
