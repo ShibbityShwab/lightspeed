@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "bytemuck_derive"
-version = "1.12.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
 dependencies = [
@@ -2536,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.12.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
 dependencies = [
@@ -4398,7 +4398,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "proptest"
-version = "1.12.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8530004ccb15eae51c7e40009fbe317f341f804db54dc033eec1c50be28cfa0"
 dependencies = [
@@ -4658,7 +4658,7 @@ checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
 name = "rayon"
-version = "1.12.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
 dependencies = [
