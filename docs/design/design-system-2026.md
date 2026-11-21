@@ -1637,10 +1637,10 @@ are `file:line`.
    `ru.toml` string (`Перезапустить от имени администратора`) measures
    **340.2 px** (corrected, §4.6) = 2 lines at 264 px (HEAD was 518.6 px = 3
    lines), so the action band stays 72 px and the 239/181 compact worst is
-   unchanged; the 73 px three-line slot is priced out. **FR is now the only
-   restart label that wraps to 3 lines (396.9 px, §4.6) — it needs shortened
-   copy or a chrome decision.** The dropped "to optimize" purpose must be
-   carried elsewhere by the spec/copy owner (flagged); the type is never shrunk.
+   unchanged; the 73 px three-line slot is priced out. **FR now fits 2 lines
+   with the landed Q5 copy (361.6 px, §4.6); no chrome change is needed.** The
+   dropped "to optimize" purpose must be carried elsewhere by the spec/copy
+   owner (flagged); the type is never shrunk.
 8. **Rail collision + 30 px state word (F1)** — the metric moves to its own row
    (mandatory), and the **remedy is the DE copy fix plus the ≤276 px acceptance
    cap at `STATE` 30 px**: corrected measurement (§4.6) shows **DE
