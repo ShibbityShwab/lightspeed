@@ -81,12 +81,19 @@ cross-platform utility, with the logic in one place and the GUI as a wrapper"
 These are **not claims**; each has a named fixture or path:
 
 1. **Linux/macOS GUI *runtime behaviour*** stays **U** until the owner names
-   hardware. The **build/headless/runner tier is verified end-to-end**: PR #180's
-   final CI run and the **first `master` run after the merge** (run 44871168694)
-   both have `Linux GUI Build`, `macOS GUI Build` and `Headless GUI Smoke` green,
-   after fixing the cross-platform issues the first runs exposed (five non-Windows
-   dead-code errors, a needless return, two manual `split_once` lints, ANSI-tainted
-   goldens — fixed in `9e1e28e`, `1d23b3d`, `a632126`).
+   hardware. The **build/runner tier is verified end-to-end**: PR #180's final
+   CI run and the **first `master` run after the merge** (run 44871168694) have
+   `Linux GUI Build` and `macOS GUI Build` green, after fixing the cross-platform
+   issues the first runs exposed (five non-Windows dead-code errors, a needless
+   return, two manual `split_once` lints, ANSI-tainted goldens — fixed in
+   `9e1e28e`, `1d23b3d`, `a632126`).
+   **The headless smoke is job-level green but has never genuinely passed**: every
+   recorded run logs `smoke: FAIL - window/log probe did not pass under Xvfb`
+   (masked by the advisory `continue-on-error`; the X11 hook logs `title=""` and
+   the macOS probe can kill the hook early). Genuine streak is **0/10**, the probe
+   fix is task-81, and no promotion/CI-parity claim may be made until 10 genuine
+   consecutive `smoke: PASS` runs are recorded (QA audit
+   `team/qa-smoke-audit/review.md`).
    Note: the pre-existing master failure `control_reconnect::supervisor_stopped_on_disconnect`
    was a test-harness race (global token fallback), not an engine defect; fixed
    test-only in task-70 and merged via PR #181 (`de26c3c`). #180 was then refreshed
@@ -155,8 +162,10 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
 
 1. **Runtime tier:** name Linux/macOS hardware to promote **U → R**; build,
    headless and runner parity are verified, runtime behaviour is not.
-2. **CI hygiene:** keep the headless smoke advisory until ~10 green runs, then
-   delete `continue-on-error`. `master` is protected with strict required checks
+2. **CI hygiene:** keep the headless smoke advisory until its probe genuinely
+   passes and ~10 genuine consecutive green runs are recorded (`smoke: PASS` log
+   lines; current genuine streak **0/10**, fix task-81), then delete
+   `continue-on-error`. `master` is protected with strict required checks
    `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`,
    `Localization Checks`.
 3. Schedule the post-W2 tasks (57/65/67/73) and Q5/Q19 when desired.
@@ -169,11 +178,12 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
 |---|---|
 | `master` merge | `4d9fe01` (PR #180, merge commit) |
 | Pre-existing test fix | `de26c3c` (PR #181) |
-| PR #180 final CI | all checks green (new Linux/macOS/headless + Windows + legacy jobs) |
-| First `master` CI after merge | run 44871168694 — **green**, including the new GUI jobs |
+| PR #180 final CI | all **job-level** checks green (new Linux/macOS/headless + Windows + legacy jobs); headless smoke job-green only, probe failing/advisory |
+| First `master` CI after merge | run 44871168694 — job-level **green**, including the new GUI jobs; headless smoke probe still failing (advisory) |
 | Branch protection | `master` protected: strict required checks `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`, `Localization Checks` |
 | Cleanup | temporary `fix/control-reconnect-race` worktree removed; evidence copied to `wat/evidence/2026-11-21/task-70-control-reconnect/` |
 
-The only remaining named-U item is **runtime behaviour on Linux/macOS** (needs
-owner hardware); build, headless and runner tiers are proven. Post-W2 debt:
-tasks 57/65/67/73, Q5 translations, Q19 fonts.
+Build and runner tiers are proven; **runtime behaviour on Linux/macOS remains U**
+(needs owner hardware) and the **headless smoke remains advisory with genuine
+streak 0/10** until task-81 lands and proves itself over 10 consecutive real runs.
+Post-W2 debt: tasks 57/65/67/73, Q5 translations, Q19 fonts.
