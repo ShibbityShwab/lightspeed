@@ -10,7 +10,7 @@ cancel = "Annuler"
 close = "Fermer"
 stop_optimizing = "Arreter l'optimisation"
 optimize_route = "Optimiser mon itineraire"
-restart_admin_optimize = "Redemarrer en administrateur pour optimiser"
+restart_admin_optimize = "Redémarrer en mode admin pour optimiser"
 manage = "Gerer"
 starting = "Démarrage..."
 
