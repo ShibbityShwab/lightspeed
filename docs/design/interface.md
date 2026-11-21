@@ -251,11 +251,16 @@ Open:
   of the estimator branch still depends on its production feed (`Measured` needs ≥8
   validated whole-path samples *and* ≥8 client-leg samples for the same relay);
   with no report and no feed the row correctly shows the prior state.
-- The delta's `route.server_leg*` / `route.cannot_beat_direct` catalog strings and the
-  W2-2 shell keys ship as English in all nine locales until the Q5 translation
-  pipeline lands (documented fallback; measured composition and the exact key list in
-  `wat/evidence/2026-11-20/w2-2/locale-fallback.md`). Translation debt, not a design
-  decision.
+- **Q5 translation pass landed 2026-11-21 (task-80).** Every locale carries
+  translated values except the brand (`LightSpeed`), the format-only
+  `{ms} ms · n={n}`, true loanwords in that language, and the four ja/ko/zh keys
+  `every_locale_carries_the_warn_only_strings` pins to English by design. The
+  measured before/after composition and the classified remainder are in
+  `wat/evidence/2026-11-21/wf081b-translations/c7-record.md`. The translations add
+  characters the frozen Q19 CJK subsets do not carry; the pinned
+  `scripts/fonts/subset_gui_fonts.py` re-cut (asset step on the same branch) must
+  land before a merged tree claims nine complete locales. Translation debt is
+  closed; the asset coverage is a separate gate.
 - The whole-path ranking key is canonical in the engine since WF-065 task-17
   (`sort_scored`: total, jitter tie-break, address last); the GUI consumes that
   order and has no comparator of its own.

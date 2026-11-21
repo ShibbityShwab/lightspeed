@@ -363,8 +363,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // rasterised no-tofu gate for the picker's own names arrived. 2618 -> 2694.
     // WF-081b (task-74): four fixtures arrive - declined-notice mapping/copy,
     // declined-notice 320 px render, A11 disclosure 320 px render, autostart
-    // copy + config round-trip. Combined integration count 2694 -> 2957.
-    ("client-gui/src/app/tests.rs", 2957),
+    // copy + config round-trip. Combined integration count 2694 -> 2957; the Q5
+    // pass made the declined-notice assertion translation-aware, 2957 -> 2973.
+    ("client-gui/src/app/tests.rs", 2973),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
