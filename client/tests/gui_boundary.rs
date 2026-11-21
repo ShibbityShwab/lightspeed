@@ -365,9 +365,10 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // declined-notice 320 px render, A11 disclosure 320 px render, autostart
     // copy + config round-trip. Combined integration count 2694 -> 2957.
     // WF-081b (task-86): four shell fixtures (tier selection incl. the 420 minimum,
-    // compact footer row arithmetic, canonical-table dispatch, tray-gated effects).
-    // 2957 -> 3137.
-    ("client-gui/src/app/tests.rs", 3137),
+    // compact footer row arithmetic, canonical-table dispatch, tray-gated effects);
+    // 2957 -> 3137. WF-081b (Q5): the declined-notice assertion became
+    // translation-aware; integrated count 3153.
+    ("client-gui/src/app/tests.rs", 3153),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`

@@ -2733,23 +2733,39 @@ fn a_declined_elevation_prompt_renders_its_notice_over_the_needs_admin_line() {
     );
     assert_eq!(super::shell_notice(None, None), None);
 
-    // The copy the state machine names is shipped in every catalog, and it says
-    // what happened rather than repeating the requirement.
+    // The copy the state machine names is shipped (and, since Q5, translated)
+    // in every catalog, and it says what happened rather than repeating the
+    // standing requirement. The assertion is translation-agnostic on purpose: an
+    // English substring in every locale would pin the C7 fallback as a contract.
     let _guard = crate::i18n::test_lock();
+    crate::i18n::set_language(Some("en"));
+    let english = crate::i18n::t("notice.elevation_declined").into_owned();
+    let requirement = crate::i18n::t("notice.needs_admin").into_owned();
     for locale in crate::i18n::LOCALES {
         crate::i18n::set_language(Some(locale.tag));
-        let text = crate::i18n::t("notice.elevation_declined");
+        let text = crate::i18n::t("notice.elevation_declined").into_owned();
         assert_ne!(
-            text.as_ref(),
-            "notice.elevation_declined",
+            text, "notice.elevation_declined",
             "{} is missing the declined notice",
             locale.tag
         );
         assert!(
-            text.to_lowercase().contains("declined"),
-            "{} does not say the prompt was declined: {text}",
+            !text.trim().is_empty(),
+            "{} has an empty declined notice",
             locale.tag
         );
+        assert_ne!(
+            text, requirement,
+            "{} repeats the needs-admin requirement instead of what happened",
+            locale.tag
+        );
+        if locale.tag != "en" {
+            assert_ne!(
+                text, english,
+                "{} must translate the declined notice (Q5)",
+                locale.tag
+            );
+        }
     }
     crate::i18n::set_language(None);
 }
