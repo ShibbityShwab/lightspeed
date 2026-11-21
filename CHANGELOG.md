@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-21
+
 ### Changed
 
 - **One config file for both front ends.** The GUI now reads and writes
@@ -1632,7 +1634,8 @@ The first release of LightSpeed - a zero-cost, open-source global network optimi
 - Amplification prevention.
 - No Critical or High audit findings.
 
-[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.3...HEAD
+[Unreleased]: https://github.com/ShibbityShwab/lightspeed/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/ShibbityShwab/lightspeed/compare/v1.11.4...v1.12.0
 [1.8.3]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/ShibbityShwab/lightspeed/compare/v1.8.0...v1.8.1
