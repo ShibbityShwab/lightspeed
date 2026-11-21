@@ -81,16 +81,16 @@ cross-platform utility, with the logic in one place and the GUI as a wrapper"
 These are **not claims**; each has a named fixture or path:
 
 1. **Linux/macOS GUI *runtime behaviour*** stays **U** until the owner names
-   hardware. The **build/headless/runner tier is now verified**: PR #180 CI run 3
-   (2026-11-21) has `Linux GUI Build`, `macOS GUI Build` and `Headless GUI Smoke`
-   green, after fixing the cross-platform issues the first run exposed. The
-   workflows' first runs found real defects (five non-Windows dead-code errors, a
-   needless return, two manual `split_once` lints, ANSI-tainted goldens) — all
-   fixed in `9e1e28e`, `1d23b3d`, `a632126`.
+   hardware. The **build/headless/runner tier is verified end-to-end**: PR #180's
+   final CI run and the **first `master` run after the merge** (run 44871168694)
+   both have `Linux GUI Build`, `macOS GUI Build` and `Headless GUI Smoke` green,
+   after fixing the cross-platform issues the first runs exposed (five non-Windows
+   dead-code errors, a needless return, two manual `split_once` lints, ANSI-tainted
+   goldens — fixed in `9e1e28e`, `1d23b3d`, `a632126`).
    Note: the pre-existing master failure `control_reconnect::supervisor_stopped_on_disconnect`
-   was a test-harness race (global token fallback), not an engine defect; it was fixed
-   test-only in task-70 and merged to `master` via PR #181 (`de26c3c`). #180 was
-   refreshed from master; its final CI run is the merge gate.
+   was a test-harness race (global token fallback), not an engine defect; fixed
+   test-only in task-70 and merged via PR #181 (`de26c3c`). #180 was then refreshed
+   and merged with all checks green.
 2. **Interactive UAC** accept/decline (harness is elevated; state machine is unit-tested).
 3. **Live tray/menu capture**, including the fifth `RelayStarved` state (needs a starving relay).
 4. **Autostart login cycle** (writers and `--autostart` are temp-dir tested).
@@ -140,11 +140,11 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
   `518dd3d` (dead-code retirement); CI fixes after the first real runner run:
   `9e1e28e` (non-Windows cfg), `1d23b3d` (ANSI/host-state-portable goldens),
   `a632126` (non-Windows clippy lints); 60 commits plus the `master` merge commit from #181.
-- **PR #180** (`wf-081-gui-refresh`, draft): refreshed from `master` after #181
-  (`de26c3c`); its final CI run gates the merge. Earlier runs: run 3 had all three
-  new jobs green (Linux GUI Build, macOS GUI Build, Headless GUI Smoke), with the
-  only red being the pre-existing `control_reconnect` — now fixed in #181.
-  Evidence: `wat/evidence/2026-11-21/ci-run/` and `task-70-control-reconnect/`.
+- **PR #180** (`wf-081-gui-refresh`): merged to `master` as `4d9fe01` on
+  2026-11-21 after a fully green refreshed CI run; the branch keeps its 60
+  evidence SHAs plus the `master` merge. PR #181 (the `control_reconnect` test
+  fix) merged earlier as `de26c3c`. Evidence:
+  `wat/evidence/2026-11-21/ci-run/` and `task-70-control-reconnect/`.
 - Evidence roots: `wat/evidence/2026-11-19/` (W1), `wat/evidence/2026-11-20/w2-1`,
   `w2-2`, `w2-3a`, `w2-3b/{s5a,s5b,s6,s6b,s6b2,s6c,s6d}`, `w2-4/{platform,ci}`,
   `w2-4a`, `w2-4b`, and each independent `team/qa-*/review*.md` with its own
@@ -153,8 +153,27 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
 
 ## 8. Remaining owner action
 
-1. Name Linux/macOS hardware to promote the runtime tier **U → R** and run the
-   first CI pass (then promote the headless smoke from advisory after ~10 greens).
-2. Schedule the post-W2 tasks (57/65/67) and Q5/Q19 when desired.
-3. Approve a release only when you choose to; the refresh made no release or
+1. **Runtime tier:** name Linux/macOS hardware to promote **U → R**; build,
+   headless and runner parity are verified, runtime behaviour is not.
+2. **CI hygiene:** keep the headless smoke advisory until ~10 green runs, then
+   delete `continue-on-error`. `master` is protected with strict required checks
+   `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`,
+   `Localization Checks`.
+3. Schedule the post-W2 tasks (57/65/67/73) and Q5/Q19 when desired.
+4. Approve a release only when you choose to; the refresh made no release or
    public change.
+
+## 9. Post-merge record (2026-11-21)
+
+| Item | Value |
+|---|---|
+| `master` merge | `4d9fe01` (PR #180, merge commit) |
+| Pre-existing test fix | `de26c3c` (PR #181) |
+| PR #180 final CI | all checks green (new Linux/macOS/headless + Windows + legacy jobs) |
+| First `master` CI after merge | run 44871168694 — **green**, including the new GUI jobs |
+| Branch protection | `master` protected: strict required checks `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`, `Localization Checks` |
+| Cleanup | temporary `fix/control-reconnect-race` worktree removed; evidence copied to `wat/evidence/2026-11-21/task-70-control-reconnect/` |
+
+The only remaining named-U item is **runtime behaviour on Linux/macOS** (needs
+owner hardware); build, headless and runner tiers are proven. Post-W2 debt:
+tasks 57/65/67/73, Q5 translations, Q19 fonts.
