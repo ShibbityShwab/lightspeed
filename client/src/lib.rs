@@ -15,7 +15,10 @@ pub mod engine;
 pub mod games;
 pub mod interceptor;
 
-pub use engine::{EngineStatus, LightSpeedEngine};
+pub use engine::{
+    AdaptivePolicy, EngineStatus, InterceptorFacts, InterceptorPlan, InterceptorRequest,
+    LightSpeedEngine, RedirectCounters, RedirectOptions, RelaySwitch,
+};
 pub use registry::{discover_relays, RelayInfo};
 
 /// The destination-aware relay chooser, re-exported for the GUI.

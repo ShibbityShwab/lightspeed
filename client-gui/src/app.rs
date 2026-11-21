@@ -344,6 +344,10 @@ pub struct LightSpeedApp<P: Platform> {
     /// An in-flight elevation handshake, if any (spec §2.2 row 7 / C8). The
     /// frame loop polls it; the process exits only once it is `Confirmed`.
     elevation: Option<ElevationAttempt>,
+    /// The catalogued notice a resolved elevation handshake leaves on screen
+    /// (spec §2.2 row 7: a declined prompt returns to ready with
+    /// `notice.elevation_declined`). Cleared when the user retries.
+    elevation_notice: Option<&'static str>,
     fonts_setup: bool,
     header_icon: Option<egui::TextureHandle>,
 
@@ -390,6 +394,17 @@ pub struct LightSpeedApp<P: Platform> {
     /// Effective path-MTU cap for the tunnel, persisted from `config.toml`.
     tunnel_mtu: usize,
 
+    /// Whether the opt-in login entry is recorded in the config (WF-081b,
+    /// task-74). The Settings toggle reconciles it with the platform entry once
+    /// per sheet open; the platform entry is the observable truth.
+    autostart: bool,
+    /// Once-per-Settings-open guard for the platform reconcile above, so the
+    /// registry/file probe is not re-run on every frame the sheet is open.
+    autostart_synced: bool,
+    /// A failed enable/disable write, shown under the toggle instead of
+    /// pretending the entry exists.
+    autostart_error: Option<String>,
+
     // ── Boost diagnostics ─────────────────────────────────────────────────
     boost_start: Option<std::time::Instant>,
     custom_port_input: String,
@@ -415,6 +430,49 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The capture-only declined notice (`LIGHTSPEED_SHOW_ELEVATION_DECLINED`).
+///
+/// **Debug/evidence builds only**: the switch renders the declined state
+/// deterministically for the 320x420 captures on a host where the interactive
+/// UAC prompt cannot be answered. A release build returns `None`, so a shipped
+/// install's environment can never force a notice the handshake did not produce.
+fn capture_elevation_notice() -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("LIGHTSPEED_SHOW_ELEVATION_DECLINED").map(|_| "notice.elevation_declined")
+}
+
+/// The catalogued notice a resolved elevation handshake leaves on screen.
+///
+/// Only a **declined** prompt leaves copy (`notice.elevation_declined`, spec
+/// §2.2 row 7): the other resolved phases keep the window, log, and leave the
+/// route surface's own notice in place. The state machine names the key, so the
+/// sentence cannot drift from the phase.
+fn elevation_declined_notice(phase: ElevationPhase) -> Option<&'static str> {
+    match phase {
+        ElevationPhase::Declined => phase.notice_key(),
+        _ => None,
+    }
+}
+
+/// The one warn notice the config region renders above the inputs it explains.
+///
+/// A live handshake outcome - a declined elevation prompt - outranks the
+/// standing Needs-elevation notice from the route surface while it is present:
+/// it says what just happened instead of repeating the requirement. It clears
+/// when the user retries ([`LightSpeedApp::restart_elevated`]).
+fn shell_notice(
+    elevation_notice: Option<&'static str>,
+    surface_notice: Option<&Line>,
+) -> Option<Line> {
+    match (elevation_notice, surface_notice) {
+        (Some(key), _) => Some(Line::new(key)),
+        (None, Some(line)) => Some(line.clone()),
+        (None, None) => None,
+    }
 }
 
 /// Time one `/health` round trip to `addr` on a background thread, matching the
@@ -598,6 +656,7 @@ impl<P: Platform> LightSpeedApp<P> {
             is_admin,
             animations,
             elevation: None,
+            elevation_notice: capture_elevation_notice(),
             fonts_setup: false,
             header_icon: None,
             details_open: false,
@@ -619,6 +678,9 @@ impl<P: Platform> LightSpeedApp<P> {
             server_error: None,
             language,
             tunnel_mtu,
+            autostart: saved.autostart,
+            autostart_synced: false,
+            autostart_error: None,
             boost_start: None,
             health_base: None,
             relay_health: None,
@@ -794,6 +856,7 @@ impl<P: Platform> LightSpeedApp<P> {
             manual_server: self.server_input.clone(),
             manual_port_range: self.custom_port_input.clone(),
             tunnel_mtu: self.tunnel_mtu,
+            autostart: self.autostart,
             selected_game: if self.game_auto || self.game_manual {
                 None
             } else {
@@ -1930,6 +1993,10 @@ impl<P: Platform> LightSpeedApp<P> {
         if self.elevation.is_some() {
             return;
         }
+        // Retrying clears the previous outcome's notice: the user has acted on
+        // it, so the old sentence would describe a prompt that is no longer the
+        // latest event.
+        self.elevation_notice = None;
         let attempt = P::begin_elevation();
         tracing::info!("elevation handshake: {:?}", attempt.phase());
         self.elevation = Some(attempt);
@@ -1960,6 +2027,10 @@ impl<P: Platform> LightSpeedApp<P> {
             let notice = phase.notice_key().unwrap_or("elevation failed");
             tracing::warn!("elevation handshake ended in {phase:?} ({notice}); staying open");
         }
+        // The declined copy is rendered by the shell (spec §2.2 row 7): the
+        // window stays open and says what happened. Other resolved phases keep
+        // logging only, exactly as before.
+        self.elevation_notice = elevation_declined_notice(phase);
         attempt.reset();
         self.elevation = None;
     }
@@ -3496,6 +3567,63 @@ impl<P: Platform> LightSpeedApp<P> {
             });
         ui.add_space(S2);
 
+        // Startup: the opt-in login entry (WF-081b, task-74). Off by default;
+        // the platform entry is the observable truth, so the checkbox is
+        // reconciled with it once per sheet open rather than trusting a config
+        // value an outside change could have made stale.
+        ui.add_space(S2);
+        hairline(ui);
+        ui.add_space(S1);
+        section_label(ui, &i18n::t("settings.startup"));
+        if !self.autostart_synced {
+            self.autostart_synced = true;
+            let installed = P::autostart_installed();
+            if installed != self.autostart {
+                tracing::info!(
+                    "autostart entry installed={installed}; recording it over the stored preference"
+                );
+                self.autostart = installed;
+                self.persist_config();
+            }
+        }
+        let autostart_changed = ui
+            .checkbox(
+                &mut self.autostart,
+                egui::RichText::new(i18n::t("settings.autostart"))
+                    .size(LABEL)
+                    .family(semibold()),
+            )
+            .on_hover_text(i18n::t("settings.autostart_hint"))
+            .changed();
+        if autostart_changed {
+            let enabled = self.autostart;
+            match P::set_autostart(enabled) {
+                Ok(()) => {
+                    self.autostart_error = None;
+                    self.persist_config();
+                    tracing::info!(
+                        "autostart entry {}",
+                        if enabled { "enabled" } else { "disabled" }
+                    );
+                }
+                Err(error) => {
+                    // The entry did not change: put the checkbox back rather
+                    // than showing a state the platform never reached.
+                    tracing::warn!("autostart write failed: {error}");
+                    self.autostart = !enabled;
+                    self.autostart_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = &self.autostart_error {
+            ui.label(
+                egui::RichText::new(format!("{}: {error}", i18n::t("error.io")))
+                    .size(CAPTION)
+                    .color(danger),
+            );
+        }
+        ui.add_space(S2);
+
         // Privacy: anonymous latency telemetry.
         ui.add_space(S2);
         hairline(ui);
@@ -4091,6 +4219,12 @@ impl<P: Platform> LightSpeedApp<P> {
                             }
                             UpdateCheckState::Idle => {}
                         }
+                        // A11 (Q18): the disclosure belongs to the surface that
+                        // acts, in every state - not only after a result.
+                        if !matches!(self.update_check, UpdateCheckState::Idle) {
+                            ui.add_space(S1);
+                            update_disclosure(ui);
+                        }
                     });
                 ui.add_space(S2);
                 if ui.button(i18n::t("action.close").as_ref()).clicked() {
@@ -4104,6 +4238,21 @@ impl<P: Platform> LightSpeedApp<P> {
             self.update_check = UpdateCheckState::Idle;
         }
     }
+}
+
+/// The A11 update-check disclosure (spec §2.5 / Q18).
+///
+/// The update sheet is the surface that acts, so it states the contract: the
+/// check is user-initiated only, contacts GitHub's release API for the latest
+/// release, sends nothing but the request, and no startup or background check
+/// exists. Catalogued copy so the promise is localized with the rest of the
+/// sheet (English fallback until Q5 lands in some locales).
+fn update_disclosure(ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new(i18n::t("update.disclosure"))
+            .size(CAPTION)
+            .color(text_3),
+    );
 }
 
 // ── eframe::App impl ─────────────────────────────────────────────────────────
@@ -4352,9 +4501,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             ui.add_space(S2);
                         }
                         // Elevation / precondition notice (warn tone), above the
-                        // inputs it explains.
-                        if let Some(notice) = &surface.notice {
-                            let text = self.line_text(notice);
+                        // inputs it explains. A declined elevation prompt's own
+                        // notice outranks the standing Needs-elevation line for
+                        // as long as it is the latest event.
+                        if let Some(notice) =
+                            shell_notice(self.elevation_notice, surface.notice.as_ref())
+                        {
+                            let text = self.line_text(&notice);
                             notice_frame(ui, false, |ui| {
                                 ui.label(
                                     egui::RichText::new(text)
@@ -4390,6 +4543,11 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             });
 
         // ── In-window sheets ─────────────────────────────────────────────
+        // Leaving Settings clears the once-per-open platform reconcile guard, so
+        // the next open re-reads the real login entry instead of a stale value.
+        if !self.show_settings {
+            self.autostart_synced = false;
+        }
         if self.show_settings {
             self.settings_sheet(&ctx);
         }
