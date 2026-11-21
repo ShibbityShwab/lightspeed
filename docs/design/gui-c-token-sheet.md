@@ -324,7 +324,7 @@ Each item is checkable in the real window/CI; failure blocks the direction.
 
 **Colour & accessibility**
 - [ ] Every palette pair in §1 passes 4.5 (text) / 3.0 (large text, boundaries, focus); the
-  `contrast-checks.md` pair set is re-run against the implemented tokens (it is the C set: 26
+  `contrast-checks.md` pair set is re-run against the implemented tokens (it is the C set: 21 asserted
   pairs, 0 failures).
 - [ ] Focus ring 2 px `c.focus`, visible on every interactive control, keyboard path complete.
 - [ ] Disabled states use disabled tokens, are not colour-only, and are exempt but still ≥3:1 UI.
@@ -411,7 +411,7 @@ one real Settings scroll state and one hover/focus state; raw PNGs + a short com
 - Sheet: `docs/design/gui-c-token-sheet.md` (this file, uncommitted).
 - Mockups and fixtures: `wat/evidence/2026-11-21/redesign-visual/c-broadcast-console/`,
   `…/mockups/dir_c.py`.
-- Contrast audit: `…/redesign-visual/contrast-checks.md` (C: 26 pairs, 0 failures).
+- Contrast audit: `…/redesign-visual/contrast-checks.md` (C: 21 asserted checks, 0 failures).
 - Review evidence target: `wat/evidence/2026-11-21/redesign-c/` (implementation's captures).
 
 ---

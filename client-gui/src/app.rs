@@ -440,6 +440,13 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
 /// screenshot. Release builds compile this to `None` (`cfg!(debug_assertions)`
 /// is false), so the shipped app can never show a state the engine did not
 /// produce.
+/// A capture-only environment switch. Debug builds read the variable; release
+/// builds always return `false`, so a shipped install can never be force-opened
+/// into an editor/picker/details sheet by its environment (QA hardening).
+fn capture_flag(name: &str) -> bool {
+    cfg!(debug_assertions) && std::env::var_os(name).is_some()
+}
+
 fn capture_forced_state() -> Option<&'static str> {
     if !cfg!(debug_assertions) {
         return None;
@@ -684,11 +691,11 @@ impl<P: Platform> LightSpeedApp<P> {
             elevation_notice: capture_elevation_notice(),
             fonts_setup: false,
             header_icon: None,
-            details_open: std::env::var_os("LIGHTSPEED_OPEN_DETAILS").is_some(),
+            details_open: capture_flag("LIGHTSPEED_OPEN_DETAILS"),
             height_restored: false,
             persisted_height: 0.0,
             show_settings: std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
-            show_game_editor: std::env::var_os("LIGHTSPEED_OPEN_EDITOR").is_some(),
+            show_game_editor: capture_flag("LIGHTSPEED_OPEN_EDITOR"),
             game_editor: GameEditorDraft::new_profile(),
             editor_saved: None,
             editor_error: None,
@@ -697,7 +704,7 @@ impl<P: Platform> LightSpeedApp<P> {
             process_search: String::new(),
             selected_custom,
             target_process: None,
-            show_target_picker: std::env::var_os("LIGHTSPEED_OPEN_PICKER").is_some(),
+            show_target_picker: capture_flag("LIGHTSPEED_OPEN_PICKER"),
             save_server_name: String::new(),
             server_saved: None,
             server_error: None,
@@ -2352,15 +2359,27 @@ impl<P: Platform> LightSpeedApp<P> {
                         ice_dim,
                         0.0,
                     );
-                    paint_tracked(
-                        painter,
-                        egui::pos2(readout.right(), readout.bottom()),
-                        egui::Align2::RIGHT_BOTTOM,
-                        &caption,
-                        &capfont,
-                        text_3,
-                        TRACK_META,
-                    );
+                    if compact {
+                        // §4.10 caption-line rule: reserve the numeral block's
+                        // width and draw the caption in the remaining column
+                        // (bottom-left), so a long RU/DE caption can never sit
+                        // under the `218 MS` numeral.
+                        let reserved = num_w + S1 + unit_w + S2;
+                        let cap_w = (readout.width() - reserved).max(40.0);
+                        let galley = painter.layout(caption, capfont, text_3, cap_w);
+                        let at = egui::pos2(readout.left(), readout.bottom() - galley.size().y);
+                        painter.galley(at, galley, text_3);
+                    } else {
+                        paint_tracked(
+                            painter,
+                            egui::pos2(readout.right(), readout.bottom()),
+                            egui::Align2::RIGHT_BOTTOM,
+                            &caption,
+                            &capfont,
+                            text_3,
+                            TRACK_META,
+                        );
+                    }
                 }
                 if !compact {
                     ui.add_space(S2);
@@ -4571,14 +4590,21 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             let label = entries[index].0.to_uppercase();
                             tracked_width(ui.painter(), &label, &font, 0.0) + 4.0 * S2
                         };
-                        let mut rows: Vec<Vec<usize>> =
-                            if (0..entries.len()).map(base_width).sum::<f32>()
+                        let per_column = ui.available_width() / entries.len().max(1) as f32;
+                        let non_ascii = entries.iter().any(|(label, _)| !label.is_ascii());
+                        let crowded = (0..entries.len()).any(|index| {
+                            let label = entries[index].0.to_uppercase();
+                            let width = tracked_width(ui.painter(), &label, &font, 0.0);
+                            width > per_column - S2 || (non_ascii && width > per_column - 5.0 * S2)
+                        });
+                        let mut rows: Vec<Vec<usize>> = if !crowded
+                            && (0..entries.len()).map(base_width).sum::<f32>()
                                 <= ui.available_width()
-                            {
-                                vec![(0..entries.len()).collect()]
-                            } else {
-                                vec![vec![0], (1..entries.len()).collect()]
-                            };
+                        {
+                            vec![(0..entries.len()).collect()]
+                        } else {
+                            vec![vec![0], (1..entries.len()).collect()]
+                        };
                         ui.spacing_mut().item_spacing.y = 0.0;
                         let wrapped = rows.len() > 1;
                         let row_height = if wrapped && compact { 30.0 } else { height };
@@ -4653,10 +4679,10 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             shell_notice(self.elevation_notice, surface.notice.as_ref())
                         {
                             let text = self.line_text(&notice);
+                            // UX round 3 F1: the shipped shell renders the
+                            // elevation notice without a tag — the hero is the
+                            // one state expression; no hardcoded HOLDING label.
                             notice_frame(ui, false, |ui| {
-                                let tag = i18n::t("state.holding").to_uppercase();
-                                tracked_label(ui, &tag, CAPTION, warn, TRACK_TAG);
-                                ui.add_space(S1);
                                 prose_label(ui, &text, PROSE, warn);
                             });
                             ui.add_space(S2);

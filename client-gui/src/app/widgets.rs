@@ -792,7 +792,7 @@ pub(super) fn console_footer(ui: &mut egui::Ui, labels: &[&str], height: f32) ->
                 .rect_filled(target, egui::CornerRadius::same(R_TAG), bg_2);
         }
         let upper = label.to_uppercase();
-        let column_avail = (column.width() - 2.0 * S2).max(1.0);
+        let column_avail = (column.width() - 3.0 * S2).max(1.0);
         let base = tracked_width(ui.painter(), &upper, &font, 0.0);
         let fit_tracking = if base >= column_avail {
             0.0
