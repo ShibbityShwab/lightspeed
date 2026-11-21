@@ -364,13 +364,20 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // WF-081b (task-74): four fixtures arrive - declined-notice mapping/copy,
     // declined-notice 320 px render, A11 disclosure 320 px render, autostart
     // copy + config round-trip. Combined integration count 2694 -> 2957.
-    ("client-gui/src/app/tests.rs", 2957),
+    // WF-081b (task-86): four shell fixtures (tier selection incl. the 420 minimum,
+    // compact footer row arithmetic, canonical-table dispatch, tray-gated effects);
+    // 2957 -> 3137. WF-081b (Q5): the declined-notice assertion became
+    // translation-aware; integrated count 3153.
+    ("client-gui/src/app/tests.rs", 3153),
     ("client-gui/src/app/theme.rs", 247),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
     // helper) is deleted; the rendered counters come from the one `RelayedPair`.
     ("client-gui/src/app/widgets.rs", 521),
-    ("client-gui/src/app/window.rs", 213),
+    // WF-081b (task-86): the one tier decision (ShellTier/shell_tier), the compact
+    // footer padding arithmetic, and the canonical-table dispatch
+    // (	ake_app_shortcut/shortcut_effect). 213 -> 341.
+    ("client-gui/src/app/window.rs", 341),
     // W2-1b: +315 lines of DTO assembly/getters. It is the one file scheduled to
     // shrink next: W2-2 replaces the legacy readouts with `route_surface` rows.
     // W2-4b: the stale `app_status` dead_code allowance is gone (the frame's
@@ -383,7 +390,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // QA R2 (task-74 conditions): the capture-only declined-notice switch is a
     // debug/evidence-gated helper (`capture_elevation_notice`), so a release
     // build can never be forced into the notice. 4423 -> 4573 -> 4581.
-    ("client-gui/src/app.rs", 4581),
+    // WF-081b (task-86): the shell consumes one tier decision, the rail drops the
+    // theme item_spacing between its rows (116 -> 108), the compact footer gets a
+    // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
+    // widget sees them. 4581 -> 4628.
+    ("client-gui/src/app.rs", 4628),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -438,7 +449,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
     // for the one helper the frozen route surface renders. 595 -> 11.
     ("client-gui/src/server_place.rs", 11),
-    ("client-gui/src/single_instance.rs", 331),
+    // WF-081b task-91: the lock/release poll helper and its three tests (macOS
+    // flake hardening); 331 -> 430 (plus the `not(windows)` gate on the deadline).
+    ("client-gui/src/single_instance.rs", 430),
     // W2-3b S6: `compare_versions` + `ReleaseAsset` moved; the GUI keeps the
     // network check, the `UpdateStatus` type and the asset resolution. 322 -> 224.
     ("client-gui/src/update.rs", 269),

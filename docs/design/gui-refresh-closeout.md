@@ -107,13 +107,34 @@ These are **not claims**; each has a named fixture or path:
    measurement, live non-error/warning states (`NO RETURN PATH` needs a starving relay),
    exhaustive sheet keyboard order.
 8. **Live starvation-warning episode** and **Linux CI for moved tests**.
-9. **Translation/font debt:** Q5 (C7 English-identical keys, last measured
-   ja/ko/zh 70, DE 51, ES/FR/PT 47, RU 45) and Q19 (subset gap `국`/`简`/`体`).
-   WF-081b (task-74) adds 4 English-fallback keys per catalog (`update.disclosure`,
-   `settings.startup`, `settings.autostart`, `settings.autostart_hint`), so the
-   running C7 count moves to **ja/ko/zh 74, DE 55, ES/FR/PT 51, RU 49** until Q5
-   lands; the captures in `wat/evidence/2026-11-21/wf081b-ui-debt/` show the
-   English sentences in the DE/RU frames, as recorded.
+9. **Translation/font debt:** Q5 is **CLOSED on the Q5 pass branch** (2026-11-21,
+   task-80): all nine catalogs were translated and the measured English-identical
+   set went from **ja/ko/zh 84, DE 65, ES/FR/PT-BR 61, RU 59** (221 keys) to
+   **ja/ko/zh 6, DE 10, ES/FR/PT-BR 3/4/3, RU 2** — the remainder is only the
+   brand `LightSpeed`, the format-only `{ms} ms · n={n}`, true loanwords (DE
+   `Version`/`Route`/`Details`/`Server`/`Status`/`Routing`, FR `Version`/
+   `Maintenance`, ES `Error`, PT `Status`) and the four ja/ko/zh keys
+   `every_locale_carries_the_warn_only_strings` pins to English by design. The
+   translations add characters the frozen Q19 CJK subsets do not carry, so the
+   six `client-gui/assets/fonts` faces must be re-cut with the pinned
+   `scripts/fonts/subset_gui_fonts.py` before that branch is mergeable; the exact
+   new codepoints per face (JP +84, KR +76, SC +115) are listed in the Q5
+   evidence. Q19's picker gap (`국`/`简`/`体`) stays closed.
+   The Q20 state-word gate was re-measured correctly (see the Q5 record: the
+   recorded widths came from a parser with a broken cmap mapping); DE
+   `state.optimizing` was shortened to `Optimierung` (317.4 → 211.6 px at STATE
+   30) and every locale now passes the ≤276 px cap (worst 266.3).
+   The earlier running count this section used (ja/ko/zh 74, DE 55, ES/FR/PT 51,
+   RU 49) added the then-predicted four UI-debt keys to the W2-2 count but
+   omitted the **ten W2-4 platform keys** (`tray.*`, `update.channel_*`, …) that
+   had already landed; the measured merge-base count is therefore
+   **84/65/61/59** on 221 keys.
+10. **The W2 copy measurements' provenance:** the W1/W2-2 width tables in
+    `wat/evidence/2026-11-20/team/design-system/` were produced by a self-written
+    OpenType parser (`fonts.py`) whose cmap mapping is wrong; the Q5 record
+    documents the erratum and re-measures the Q20 state words with fontTools.
+    The action-label widths (Q15) have the same provenance and are being
+    re-measured by a design-system task; do not reuse the old numbers.
 
 ## 5. Debt register (post-W2, on the board)
 
@@ -122,7 +143,7 @@ These are **not claims**; each has a named fixture or path:
 | task-57 | engine surface + migration for the CLI live modes (`watch` → `--start-interceptor` → `--game-server`), behavior-preserving | rust-dev + net-eng |
 | task-65 | elevation-declined notice rendering; A11 `update.disclosure` copy; C7 record update | interface-designer — **closed by WF-081b (task-74)**, see §5 note |
 | task-67 | autostart Settings toggle; narrow the `autostart.rs` module-wide allowance | interface-designer + desktop-platform — **closed by WF-081b (task-74)**, see §5 note |
-| Q5 | translation pipeline for the remaining English-identical keys | ux-lead — WF-081b added 4 more English-fallback keys per catalog |
+| Q5 | translation pipeline for the remaining English-identical keys | ux-lead — **closed by WF-081b (task-80)**, see §4 note 9 |
 | Q19 | font-subset regeneration for the CJK gaps | design-system |
 
 **WF-081b (task-74) closes tasks 65 and 67:** the declined-prompt notice is wired
@@ -131,8 +152,9 @@ the A11 `update.disclosure` sentence is on the updater sheet in all 9 catalogs
 (320 px fit fixture + EN/DE/RU captures), and Settings → Startup has the
 autostart toggle (`config.autostart` + `platform/autostart.rs`
 `installed_current`/`apply_current`, round-trip tested) whose module-wide
-`allow(dead_code)` is **removed**. The added locale keys are English fallback
-until Q5 lands.
+`allow(dead_code)` is **removed**. The added locale keys were English fallback
+until Q5 landed (task-80, §4 note 9): they are translated now, and the declined
+notice's Q5-era test assertion was made translation-aware.
 
 Documented exceptions (not debt to hide) — the **complete** `allow(dead_code)`
 inventory in `client-gui/` after WF-081b: the **three platform exemptions**
@@ -205,4 +227,4 @@ Reset; N1 per-command `AppErrorKind`; R16 real streak publication; and the W2-2
 Build and runner tiers are proven; **runtime behaviour on Linux/macOS remains U**
 (needs owner hardware) and the **headless smoke remains advisory with genuine
 streak 0/10** until task-81 lands and proves itself over 10 consecutive real runs.
-Post-W2 debt: tasks 57/65/67/73, Q5 translations, Q19 fonts.
+Post-W2 debt: tasks 57/65/67/73, Q5 translations (closed by task-80), Q19 fonts.
