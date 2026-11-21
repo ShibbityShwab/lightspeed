@@ -12,6 +12,19 @@
 
 ## Recent entries
 
+### 2026-11-21 (POST-MERGE) - PR #181 and #180 merged; master protected; first master CI green
+
+**Agent:** lead, executing the team-consultation path the owner chose.
+
+- **Executed the chosen path:** (1) task-70 (pre-existing `control_reconnect` test race) fixed test-only in an isolated worktree by `net-eng`, Lead-gated, shipped as **PR #181**, whose CI was **fully green**, and merged to `master` as `de26c3c`; (2) **PR #180** (the WF-081 refresh) was refreshed from master (`7444f35` merge commit), QA's doc nits fixed, its refreshed CI was **all green** (new Linux/macOS/headless jobs + Check & Test + Code Coverage + QUIC Integration + Windows + legacy), marked ready and **merged to `master` as `4d9fe01` with a merge commit** (no squash/rebase; the 60 evidence SHAs are preserved); (3) **branch protection set on `master`** — strict required checks `Check & Test`, `Windows GUI Build`, `Linux GUI Build`, `macOS GUI Build`, `Localization Checks`; (4) first `master` CI run after the merge (**44871168694**) completed **green**, including the new GUI and headless jobs.
+- **QA gates:** `qa-engineer-2` delivered the targeted pre-merge **ACCEPT** on the four CI-fix commits (diff/scope, goldens byte-identical to seed with the update env unused, guard G2/G3 mutation, full Windows gate, CI evidence cross-checked); conditions (task-70 first + green rerun, register the mock-interceptor flake, two doc nits) are all satisfied.
+- **Cleanup:** temporary `fix/control-reconnect-race` worktree removed (evidence copied to `wat/evidence/2026-11-21/task-70-control-reconnect/`); local worktree is now on a short-lived `docs/wf-081-merge-record` branch for this post-merge state record.
+- **Close-out updated** with the post-merge record (§9: merge SHAs, CI run, protection, cleanup) and the reduced owner-action list. The only remaining named-U is **Linux/macOS runtime behaviour** (needs hardware); post-W2 debt: tasks 57/65/67/73, Q5 translations, Q19 fonts.
+- **Guardrails:** $0.00; no release, deploy or public post was initiated by this work; the merge applied the program that was already reviewed/accepted. Branch protection now makes master merges require the five checks.
+
+**Verified:** PR #181 all-checks-green and merged; PR #180 all-checks-green and merged; first master CI green; branch protection verified via API; QA targeted ACCEPT. **Not verified:** Linux/macOS runtime behaviour (hardware); post-W2 debt items.
+**Open:** runtime tier U→R when hardware is named; post-W2 tasks 57/65/67/73; Q5/Q19; release decision is the owner's.
+
 ### 2026-11-21 (team consultation → task-70 fix → #180 refresh) - pre-existing red fixed; #180 merge pending final CI
 
 **Agent:** lead + `qa-engineer-2` + `net-eng` + `dev-ops` + `architect` consultation; `net-eng` task-70 fix.
