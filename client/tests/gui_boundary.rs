@@ -398,7 +398,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4764),
+    ("client-gui/src/app.rs", 4733),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
