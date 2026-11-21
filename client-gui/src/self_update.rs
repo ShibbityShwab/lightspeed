@@ -45,9 +45,9 @@ pub fn install_blocking(asset: ReleaseAsset) -> InstallOutcome {
     #[cfg(not(windows))]
     {
         let _ = asset;
-        return Err(
-            "in-place updates run on Windows; update through your package manager".to_string(),
-        );
+        // `Err` is the block's tail (the Windows block is compiled out on
+        // non-Windows), so the value flows through unchanged without a `return`.
+        Err("in-place updates run on Windows; update through your package manager".to_string())
     }
 
     #[cfg(windows)]
