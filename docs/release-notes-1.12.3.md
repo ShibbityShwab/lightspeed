@@ -22,12 +22,16 @@ not latched, so the next start could still proceed.
 - **Start error paths release handles synchronously.** The tunnel UDP socket is
   bound before `spawn_blocking`/owner tasks are created; the only remaining
   fallible setup steps now unwind while no thread can touch a handle.
-- **Driver preflight.** `check_availability` opens and closes a send-only
-  WinDivert handle (no filter registration) and maps the actionable failures:
-  not administrator, stale WFP filter, invalid signature, driver blocked. The
-  preflight does not block starts on unclassified probe errors.
-- **Smaller WFP surface.** The inject handle is opened with `send_only`, so it
-  no longer registers a capture filter.
+- **Driver preflight.** Immediately before a start — never during standalone
+  status/capability queries — a sniff handle with a real filter exercises the
+  per-handle WinDivert installation path and maps the actionable failures: not
+  administrator, stale WFP filter, invalid signature, driver blocked. The probe
+  does not block starts on unclassified errors. A successful probe also clears a
+  teardown latch left by a transient stop timeout, so one slow teardown cannot
+  permanently disable boost until restart.
+- **Write-only inject intent.** The inject handle is opened with `send_only`.
+  This does not reduce the WFP object count (its `"false"` filter already
+  installed no callouts); it makes the write-only contract explicit.
 - **Live relay exclusion.** The tunnel task can switch relays through
   `session::current_proxy()` without reopening WinDivert. Packets to a relay
   selected after start are now checked against the live proxy per packet and

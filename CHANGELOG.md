@@ -20,13 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The tunnel socket is bound before any owner thread exists; the only fallible
   setup steps now unwind with no thread touching a WinDivert handle, so the
   handle drops release the WFP state synchronously.
-- **A driver preflight replaces the halfway-through-boost failure.** Before a
-  plan/start, a send-only probe checks that the driver can actually be opened.
-  Administrator, stale-filter (`FWP_E_IN_USE`), invalid-signature and
-  driver-blocked failures now each name their real remedy. The probe only
-  blocks on those actionable classes.
-- **The inject handle is opened send-only.** It no longer registers a capture
-  filter, reducing the WFP objects a session creates.
+- **A driver preflight replaces the halfway-through-boost failure.** Immediately
+  before a start (never during status/capability queries), a sniff handle with a
+  real filter exercises the per-handle WinDivert installation path. Administrator,
+  stale-filter (`FWP_E_IN_USE`), invalid-signature and driver-blocked failures now
+  each name their real remedy. The probe only blocks on those actionable classes.
+  A successful preflight also clears a teardown latch left by a transient stop
+  timeout, so the app is not permanently bricked by one slow teardown.
+- **The inject handle is opened send-only.** It is write-only by intent; this
+  makes that explicit but does not change the WFP object count (its filter was
+  already `"false"`, which installs no callouts).
 - **Relay switches re-check the live proxy per packet.** The static capture
   filter cannot change without reopening WinDivert, so packets to a relay
   selected after start are now re-injected instead of being fed back into the

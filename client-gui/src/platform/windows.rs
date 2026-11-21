@@ -6,8 +6,8 @@
 //! instance confirms startup (spec §2.2 row 7 / C8).
 //!
 //! The tray's colour/tooltip/menu mapping is pure data in [`super::tray_menu`];
-//! this file applies it. The capture check (`sc query npcap`) is the known
-//! wrong-dependency stub (cross-platform plan S9) and is not this wave's work.
+//! this file applies it. The capture check probes the WinDivert binaries the
+//! shipped build actually loads (plan S9 removed the old Npcap probe).
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -242,8 +242,8 @@ impl TrayHandle for WindowsTray {
 /// Windows [`Platform`] backend.
 ///
 /// Uses `tray_icon` for the system tray, the process token for elevation,
-/// `SPI_GETCLIENTAREAANIMATION` for reduced motion, and Npcap detection via
-/// `sc query` (the known wrong-dependency stub, plan S9).
+/// `SPI_GETCLIENTAREAANIMATION` for reduced motion, and WinDivert binary
+/// detection for the Components row.
 pub struct WindowsPlatform;
 
 /// `SPI_GETCLIENTAREAANIMATION`: non-zero means client-area animation is ON.

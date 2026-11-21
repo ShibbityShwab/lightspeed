@@ -1503,7 +1503,8 @@ impl LightSpeedEngine {
         // validates the new request; keep that exact order. A teardown that
         // could not be acknowledged fails closed instead of opening a second
         // WinDivert filter beside the old one.
-        if !self.stop_interceptor() {
+        self.stop_supervised();
+        if self.interceptor_handle.is_some() && !self.stop_interceptor() {
             return Err(
                 "previous interception did not shut down cleanly; restart LightSpeed before starting again"
                     .to_string(),
@@ -1676,23 +1677,25 @@ impl LightSpeedEngine {
     /// here with the backend's own reason and nothing is started, which is where
     /// the shipped path refused too.
     pub fn start_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
+        // Refuse an unavailable plan before touching a running session: a plan
+        // that cannot start must not tear down the current one.
+        if let Err(reason) = &plan.facts.available {
+            return Err(reason.clone());
+        }
         // The plan path is public and is called directly by the live modes. It
         // must not assume the caller stopped the previous run first.
-        if self.interceptor_teardown_incomplete {
-            return Err(
-                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
-                    .to_string(),
-            );
-        }
         if self.interceptor_handle.is_some() && !self.stop_interceptor() {
             return Err(
                 "previous interception did not shut down cleanly; restart LightSpeed before starting again"
                     .to_string(),
             );
         }
-        if let Err(reason) = &plan.facts.available {
-            return Err(reason.clone());
-        }
+        // Side-effecting readiness probe, only on the start path. A successful
+        // probe proves the driver can install a new filter, so it also clears a
+        // teardown latch left by a transient timeout; an unsuccessful one keeps
+        // the latch and reports the real remedy.
+        plan.interceptor.preflight()?;
+        self.interceptor_teardown_incomplete = false;
         let InterceptorPlan {
             interceptor,
             config,
@@ -1910,6 +1913,15 @@ impl LightSpeedEngine {
     /// with the data plane. No log line is emitted here; the caller owns it.
     pub fn stop_interceptor_keep_registration(&mut self, timeout: Duration) -> bool {
         if self.interceptor_teardown_incomplete {
+            if let Ok(mut s) = self.status.write() {
+                s.interceptor_active = false;
+                s.interceptor_error = Some(
+                    "Previous interception did not shut down cleanly. Restart \
+                     LightSpeed before starting again so its WinDivert filter \
+                     can be released."
+                        .to_string(),
+                );
+            }
             return false;
         }
         let Some(mut handle) = self.interceptor_handle.take() else {
@@ -2601,34 +2613,6 @@ mod tests {
             !InterceptorRequest::new("cs2", relay, false, 4)
                 .adaptive
                 .enabled
-        );
-    }
-
-    #[test]
-    fn a_plan_refuses_to_start_after_incomplete_teardown() {
-        let mut engine = test_engine();
-        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
-        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 28015);
-        let request =
-            InterceptorRequest::new("cs2", relay, false, 4).with_server_override(Some(server));
-        let plan = engine
-            .plan_interceptor(request)
-            .expect("a known server must plan without a running game");
-
-        // Simulate a stop whose owner threads never acknowledged. The public
-        // plan path is reachable from the live modes, so it must refuse rather
-        // than open a filter next to the one that may still be registered.
-        engine.interceptor_teardown_incomplete = true;
-        let err = engine
-            .start_interceptor_plan(plan)
-            .expect_err("an incomplete teardown must fail closed");
-        assert!(
-            err.contains("did not shut down cleanly"),
-            "the refusal names the teardown state: {err}"
-        );
-        assert!(
-            !engine.snapshot().interceptor_active,
-            "a refused start must not report an active interceptor"
         );
     }
 

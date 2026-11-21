@@ -1048,20 +1048,22 @@ impl TrafficInterceptor for WinDivertInterceptor {
         if !dll.exists() {
             return Err(format!("WinDivert.dll not found at {}", dll.display()));
         }
-        // Files existing is not enough: the driver may be missing, blocked, or
-        // carrying a stale provider from a previous run. Probe with a
-        // send-only handle (no filter registration) so the failure appears at
-        // capability/start-preflight time with a specific remedy, not halfway
-        // through a boost.
+        Ok(())
+    }
+
+    fn preflight(&self) -> Result<(), String> {
+        // Called only immediately before a start, never from status/capability
+        // queries. A sniff handle with a real filter exercises the per-handle
+        // callout/filter installation path (the one that returns FWP_E_IN_USE
+        // for a stale provider) without diverting any traffic. Port 9 is a
+        // discard port; this filter cannot match normal game traffic.
         match OwnedHandle::open(
-            "false",
+            "udp and outbound and udp.DstPort == 9",
             WinDivertLayer::Network,
             0,
-            WinDivertFlags::new().set_send_only(),
+            WinDivertFlags::new().set_sniff(),
         ) {
             Ok(handle) => {
-                // A probe failure here would be a new way to block every start;
-                // only the failures this preflight exists to explain are fatal.
                 if let Err(e) = handle.close() {
                     tracing::warn!("WinDivert preflight close failed: {e}");
                 }

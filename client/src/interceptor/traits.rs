@@ -824,7 +824,23 @@ pub trait TrafficInterceptor: Send + Sync {
     /// Whether this interceptor can run on the current OS + feature set.
     ///
     /// Returns `Err` with a human-readable explanation if unavailable.
+    /// Whether this backend can run on the current host.
+    ///
+    /// This is a **read-only capability answer**: it must not open a platform
+    /// handle, install a driver, or require elevation. Callers use it to decide
+    /// what a front end may offer before asking the user to elevate.
     fn check_availability(&self) -> Result<(), String>;
+
+    /// Side-effecting readiness probe used immediately before a start.
+    ///
+    /// Unlike [`Self::check_availability`], this may open and close a real
+    /// backend handle (or otherwise touch driver state) to prove that the start
+    /// can actually succeed. It is never called by status/capability queries.
+    /// The default is the read-only check, which is correct for backends whose
+    /// `start()` failure is already actionable.
+    fn preflight(&self) -> Result<(), String> {
+        self.check_availability()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

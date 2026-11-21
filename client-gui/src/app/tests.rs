@@ -3173,12 +3173,12 @@ fn the_console_row_model_stacks_instead_of_clipping() {
 }
 // ── Direction C (task-101): Components row fit (review Major 1) ─────────────
 
-/// The review found `NPCAPnot installed (pcap fallback only)` because a shorter
-/// width was measured than painted. Both strings are measured with the same
-/// font/tracking that paints them; at the Settings sheet's body width the pair
-/// must take the stacked branch rather than collide.
+/// The driver row must fit inline at the Settings sheet's body width. Both
+/// strings are measured with the same font/tracking that paints them, so this
+/// pins the shipped "DRIVER / WinDivert missing" pair against a future value
+/// that would need the stacked branch.
 #[test]
-fn the_components_npcap_row_stacks_instead_of_colliding() {
+fn the_components_driver_row_fits_inline() {
     use eframe::egui;
     let ctx = egui::Context::default();
     super::install_fonts(&ctx, Some("en"));
@@ -3193,24 +3193,19 @@ fn the_components_npcap_row_stacks_instead_of_colliding() {
     let mut measured = None;
     let mut out = ctx.run_ui(raw, |ui| {
         let font = egui::FontId::new(crate::design::CAPTION, super::console());
-        let label = super::tracked_width(ui.painter(), "NPCAP", &font, crate::design::TRACK_LABEL);
-        let value = super::tracked_width(
-            ui.painter(),
-            "not installed (pcap fallback only)",
-            &font,
-            0.0,
-        );
+        let label = super::tracked_width(ui.painter(), "DRIVER", &font, crate::design::TRACK_LABEL);
+        let value = super::tracked_width(ui.painter(), "WinDivert missing", &font, 0.0);
         measured = Some((label, value));
     });
     out.textures_delta.clear();
     let (label_w, value_w) = measured.expect("measured the Components row");
     // The Settings sheet body is ~232 px wide at 320 px (264 px sheet − margins).
     assert!(
-        !super::row_fits(label_w, value_w, 232.0),
-        "NPCAP + fallback value must stack (label {label_w:.1}, value {value_w:.1})"
+        super::row_fits(label_w, value_w, 232.0),
+        "DRIVER + WinDivert missing must fit inline (label {label_w:.1}, value {value_w:.1})"
     );
     assert!(
-        label_w + crate::design::S4 + value_w > 232.0,
-        "the inline branch would collide (label {label_w:.1}, value {value_w:.1})"
+        label_w + crate::design::S4 + value_w <= 232.0,
+        "the inline branch must not collide (label {label_w:.1}, value {value_w:.1})"
     );
 }
