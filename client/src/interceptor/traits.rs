@@ -583,6 +583,13 @@ pub struct InterceptorStats {
 /// to [`InterceptorHandle::new`] and keep the signalling-only behaviour.
 pub struct PlatformTeardown {
     unblock: Box<dyn FnOnce() + Send>,
+    /// Closes the platform handles after every owner thread acknowledged.
+    ///
+    /// Without this, `stop_and_wait` can return while the last `Arc` clones are
+    /// still dropping; the OS may recycle the raw handle value and a new
+    /// session can open while the old filter is still registered. Closing here
+    /// makes the release synchronous before the next start.
+    close: Option<Box<dyn FnOnce() + Send>>,
     ack: TeardownAck,
 }
 
@@ -591,6 +598,21 @@ impl PlatformTeardown {
     pub(super) fn new(unblock: impl FnOnce() + Send + 'static, ack: TeardownAck) -> Self {
         Self {
             unblock: Box::new(unblock),
+            close: None,
+            ack,
+        }
+    }
+
+    /// Like [`Self::new`], plus a handle-close hook run after every owner
+    /// thread acknowledged (never before: a thread may still touch a handle).
+    pub(super) fn with_close(
+        unblock: impl FnOnce() + Send + 'static,
+        close: impl FnOnce() + Send + 'static,
+        ack: TeardownAck,
+    ) -> Self {
+        Self {
+            unblock: Box::new(unblock),
+            close: Some(Box::new(close)),
             ack,
         }
     }
@@ -610,6 +632,11 @@ pub struct InterceptorHandle {
     /// Releases a thread parked in a blocking platform receive. Taken on the
     /// first `stop()`, so it never runs twice.
     unblock: Option<Box<dyn FnOnce() + Send>>,
+    /// Closes the platform handles after every owner thread acknowledged.
+    /// Only [`Self::stop_and_wait`] runs it; a bare `stop()`/Drop leaves the
+    /// handles to their `Arc` fallback because it cannot prove the threads are
+    /// no longer touching them.
+    close_handles: Option<Box<dyn FnOnce() + Send>>,
     /// Completes once every platform owner thread acknowledged that it stopped
     /// touching its handle.
     teardown_ack: Option<TeardownAck>,
@@ -630,15 +657,16 @@ impl InterceptorHandle {
         platform: &'static str,
         teardown: Option<PlatformTeardown>,
     ) -> Self {
-        let (unblock, teardown_ack) = match teardown {
-            Some(teardown) => (Some(teardown.unblock), Some(teardown.ack)),
-            None => (None, None),
+        let (unblock, close_handles, teardown_ack) = match teardown {
+            Some(teardown) => (Some(teardown.unblock), teardown.close, Some(teardown.ack)),
+            None => (None, None, None),
         };
         Self {
             shutdown_tx: Some(shutdown_tx),
             counters,
             platform,
             unblock,
+            close_handles,
             teardown_ack,
             tunnelling: None,
         }
@@ -719,10 +747,20 @@ impl InterceptorHandle {
     /// not assume the kernel filter was released.
     pub fn stop_and_wait(&mut self, timeout: Duration) -> bool {
         self.stop();
-        match self.teardown_ack.take() {
+        let acknowledged = match self.teardown_ack.take() {
             Some(ack) => ack.wait(timeout),
             None => true,
+        };
+        // Only close after every owner thread promised it no longer touches
+        // the handle. Doing this here (instead of leaving it to the last Arc
+        // drop) is what lets the caller start a new session on the same filter
+        // immediately: the old WFP filter is gone before `stop_and_wait` returns.
+        if acknowledged {
+            if let Some(close) = self.close_handles.take() {
+                close();
+            }
         }
+        acknowledged
     }
 
     /// Whether this run is still intercepting.
@@ -812,7 +850,7 @@ impl TrafficInterceptor for UnsupportedInterceptor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
 
     use super::*;
 
@@ -929,6 +967,51 @@ mod tests {
         assert!(handle.stop_and_wait(Duration::from_millis(500)));
 
         owner.join().expect("owner thread must finish");
+    }
+
+    #[test]
+    fn stop_and_wait_closes_handles_only_after_the_ack() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let closed_in_hook = Arc::clone(&closed);
+        let (ack_tx, ack) = TeardownAck::new(1);
+        let teardown = PlatformTeardown::with_close(
+            move || {
+                let _ = ack_tx.send(());
+            },
+            move || {
+                closed_in_hook.store(true, Ordering::Relaxed);
+            },
+            ack,
+        );
+        let mut handle = handle_with(Some(teardown));
+
+        assert!(handle.stop_and_wait(Duration::from_millis(500)));
+        assert!(
+            closed.load(Ordering::Relaxed),
+            "the close hook must run before stop_and_wait returns, so a new session cannot reopen while the old filter is registered"
+        );
+    }
+
+    #[test]
+    fn stop_and_wait_does_not_close_when_the_ack_times_out() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let closed_in_hook = Arc::clone(&closed);
+        let (ack_tx, ack) = TeardownAck::new(1);
+        let teardown = PlatformTeardown::with_close(
+            || {},
+            move || {
+                closed_in_hook.store(true, Ordering::Relaxed);
+            },
+            ack,
+        );
+        let mut handle = handle_with(Some(teardown));
+
+        assert!(!handle.stop_and_wait(Duration::from_millis(30)));
+        assert!(
+            !closed.load(Ordering::Relaxed),
+            "a thread may still touch the handle on timeout, so close must not run"
+        );
+        drop(ack_tx);
     }
 
     #[test]

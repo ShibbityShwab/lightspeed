@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Relay switches close the old WinDivert handles before the next session
+  starts.** `stop_and_wait` returned as soon as the owner threads acknowledged,
+  but the last `Arc` clone could drop later; the new session could then open its
+  filter while the old one was still registered (`FWP_E_IN_USE`) or a late close
+  could hit a recycled handle value. Platform teardown now closes the handles
+  synchronously after every owner acknowledged, and does not close on an
+  acknowledgement timeout. Tests cover both paths.
 - **WinDivert open failures are reported truthfully.** `WinDivertOpen` signals
   failure with `INVALID_HANDLE_VALUE`, but the client only checked for a NULL
   handle. A stale WinDivert WFP filter (`FWP_E_IN_USE`, `0x8032000A`) was
