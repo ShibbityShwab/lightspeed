@@ -173,10 +173,12 @@ pub const LOCALES: &[LocaleInfo] = &[
 
 /// The capture/fixture locale override environment variable.
 ///
-/// Same family as the app's `LIGHTSPEED_OPEN_*` switches: a real-window
-/// evidence capture cannot switch languages on a machine whose
-/// `lightspeed.toml` pins one, and WF-081b needs EN/DE/RU frames. The override
-/// applies to that process only and is never set in normal operation.
+/// **Debug/evidence builds only** (the same family as the app's
+/// `LIGHTSPEED_OPEN_*` switches): a real-window evidence capture cannot switch
+/// languages on a machine whose `lightspeed.toml` pins one, and WF-081b needs
+/// EN/DE/RU frames. [`configured_language`] consults it only when
+/// `debug_assertions` is on, so a shipped (release) binary can never be
+/// language-forced by its environment; normal launches never set it.
 const LOCALE_OVERRIDE_ENV: &str = "LIGHTSPEED_LOCALE";
 
 /// A raw override value, where blank means "no override".
@@ -186,10 +188,18 @@ fn locale_override(raw: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Requested locale for this process: a capture override, else the pinned
-/// language, else the OS locale.
+/// Requested locale for this process: a capture override (debug/evidence builds
+/// only), else the pinned language, else the OS locale.
 fn configured_language() -> Option<String> {
-    locale_override(std::env::var(LOCALE_OVERRIDE_ENV).ok().as_deref())
+    // Capture-only: in a release build `cfg!(debug_assertions)` is false, so the
+    // environment read is compiled to `None` and `LIGHTSPEED_LOCALE` cannot
+    // force a shipped install's language.
+    let override_tag = if cfg!(debug_assertions) {
+        locale_override(std::env::var(LOCALE_OVERRIDE_ENV).ok().as_deref())
+    } else {
+        None
+    };
+    override_tag
         .or_else(|| {
             pinned()
                 .lock()

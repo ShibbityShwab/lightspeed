@@ -377,8 +377,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // + `shell_notice`), the Settings → Startup autostart toggle with its
     // once-per-open platform reconcile, and the A11 `update_disclosure` render
     // (now a free fn so its 320 px fit is testable). No width/layout change
-    // beyond the one Settings row and the notices. 4423 -> 4573.
-    ("client-gui/src/app.rs", 4573),
+    // beyond the one Settings row and the notices.
+    // QA R2 (task-74 conditions): the capture-only declined-notice switch is a
+    // debug/evidence-gated helper (`capture_elevation_notice`), so a release
+    // build can never be forced into the notice. 4423 -> 4573 -> 4581.
+    ("client-gui/src/app.rs", 4581),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -401,8 +404,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // WF-081b (task-74): the capture/fixture locale override
     // (`LIGHTSPEED_LOCALE`, the same family as the app's `LIGHTSPEED_OPEN_*`
     // switches) plus its blank-tolerance test, so the 320x420 evidence captures
-    // can be taken in EN/DE/RU on a host whose config pins a language. 506 -> 534.
-    ("client-gui/src/i18n.rs", 534),
+    // can be taken in EN/DE/RU on a host whose config pins a language.
+    // QA R2 (task-74 conditions): the override is consulted only behind
+    // `cfg!(debug_assertions)` and is documented as debug/evidence-only, so a
+    // shipped build cannot be language-forced by its environment. 506 -> 534 -> 544.
+    ("client-gui/src/i18n.rs", 544),
     ("client-gui/src/main.rs", 377),
     // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
     ("client-gui/src/paths.rs", 91),

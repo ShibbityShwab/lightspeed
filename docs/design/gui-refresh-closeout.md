@@ -127,13 +127,18 @@ autostart toggle (`config.autostart` + `platform/autostart.rs`
 `allow(dead_code)` is **removed**. The added locale keys are English fallback
 until Q5 lands.
 
-Documented exceptions (not debt to hide): `elevation.rs` `cfg_attr(not(windows))`,
-`platform/mod.rs` `TrayAction` (Windows-tray only), and the pre-existing
-`client-gui/src/design.rs:18` token-scale `allow(dead_code, non_upper_case_globals)`
-that predates the refresh (outside the W2-2/W2-4 family). The `autostart.rs`
-module-wide allowance named in task-67 is **gone** (WF-081b). A pre-existing
-`e2e-test` CI job that starts servers with no client test step was observed and
-deliberately not touched (outside W2-4).
+Documented exceptions (not debt to hide) — the **complete** `allow(dead_code)`
+inventory in `client-gui/` after WF-081b: the **three platform exemptions**
+(`platform/elevation.rs` `watch`, a Windows-only `cfg_attr(not(windows))` item;
+`platform/mod.rs` `TrayAction`, whose variants only the Windows tray constructs;
+and `platform/animations.rs` `Off`/`from_windows_flag`, two Windows-only
+`cfg_attr(not(windows))` items) **plus the pre-existing
+`client-gui/src/design.rs:18` token-scale `allow(dead_code,
+non_upper_case_globals)`** that predates the refresh (outside the W2-2/W2-4
+family). The `autostart.rs` module-wide allowance named in task-67 is **gone**
+(WF-081b); no blanket allowance remains in the GUI. A pre-existing `e2e-test` CI
+job that starts servers with no client test step was observed and deliberately
+not touched (outside W2-4).
 
 ## 6. Decisions of record
 

@@ -432,6 +432,19 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The capture-only declined notice (`LIGHTSPEED_SHOW_ELEVATION_DECLINED`).
+///
+/// **Debug/evidence builds only**: the switch renders the declined state
+/// deterministically for the 320x420 captures on a host where the interactive
+/// UAC prompt cannot be answered. A release build returns `None`, so a shipped
+/// install's environment can never force a notice the handshake did not produce.
+fn capture_elevation_notice() -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("LIGHTSPEED_SHOW_ELEVATION_DECLINED").map(|_| "notice.elevation_declined")
+}
+
 /// The catalogued notice a resolved elevation handshake leaves on screen.
 ///
 /// Only a **declined** prompt leaves copy (`notice.elevation_declined`, spec
@@ -643,12 +656,7 @@ impl<P: Platform> LightSpeedApp<P> {
             is_admin,
             animations,
             elevation: None,
-            // Capture/fixture switch only (same family as `LIGHTSPEED_OPEN_*`):
-            // it renders the declined-prompt notice deterministically for the
-            // 320x420 evidence captures on a host where the interactive UAC
-            // prompt cannot be answered. Never set in normal operation.
-            elevation_notice: std::env::var_os("LIGHTSPEED_SHOW_ELEVATION_DECLINED")
-                .map(|_| "notice.elevation_declined"),
+            elevation_notice: capture_elevation_notice(),
             fonts_setup: false,
             header_icon: None,
             details_open: false,
