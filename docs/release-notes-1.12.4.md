@@ -15,6 +15,8 @@ restored.
 
 ## Fixed
 
+- **Updated `url` to 2.5.9** for RUSTSEC-2026-0592, a denial-of-service stack
+  overflow in `Url::origin()` on nested `blob:` URLs.
 - **Sniff preflight handle removed.** The teardown latch is now cleared only
   after a real interceptor start succeeds. No extra probe handle is opened
   before a start.

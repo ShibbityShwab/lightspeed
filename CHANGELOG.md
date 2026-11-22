@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Updated `url` 2.5.9** for RUSTSEC-2026-0592 (stack overflow in
+  `Url::origin()` on nested `blob:` URLs).
 - **Reverted the two handle-shape changes introduced in 1.12.3.** A fresh-boot
   field run showed that after one successful interception session the next start
   saw an orphaned WinDivert WFP provider even though no process held a handle;
