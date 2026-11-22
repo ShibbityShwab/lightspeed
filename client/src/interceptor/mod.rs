@@ -46,6 +46,28 @@
 //! | Linux   | (none)                   | nftables/iptables | Port+dest   |
 //! | macOS   | (none)                   | pfctl          | Port+dest      |
 //! | Other   |,                        | Unsupported    |,              |
+//!
+//! ## Pinned WinDivert driver (Windows)
+//!
+//! A Stop/start cycle on Windows closes and reopens the diverting WinDivert
+//! handles. If that also unloads and reloads the driver, a WFP filter can be
+//! left registered and the next open fails with `FWP_E_IN_USE` (0x8032000A).
+//! The engine therefore keeps ONE permanent non-diverting handle alive with
+//! [`pin_driver`] for the app lifetime: a normal interception stop closes the
+//! intercept/inject/shadow handles and leaves the pin (and the loaded driver)
+//! alone, and [`release_driver_pin`] closes the pin only at explicit app
+//! shutdown. Both functions are idempotent and are no-ops on builds without
+//! WinDivert, so engine code can call them unconditionally.
+//!
+//! ```rust,no_run
+//! use lightspeed_client::interceptor::{driver_pin_active, pin_driver, release_driver_pin};
+//!
+//! pin_driver().expect("WinDivert driver unavailable");
+//! assert!(driver_pin_active());
+//! // ... start/stop interception as often as needed ...
+//! release_driver_pin();
+//! assert!(!driver_pin_active());
+//! ```
 
 pub mod bypass;
 pub mod flows;
@@ -88,6 +110,107 @@ pub use crate::games::TransportProto;
 pub use traits::{
     InterceptorConfig, InterceptorHandle, ProcessTarget, Route, TrafficInterceptor,
     TransportProtocol, UnsupportedInterceptor,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pinned WinDivert driver (app-lifetime integration API)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The engine owns the lifecycle: pin once before the first interception start,
+// release once at explicit app shutdown. The backend owns the handle itself (a
+// process-wide slot in `windivert_handle`), so a normal Stop that closes the
+// diverting handles cannot close the pin, and a second pin call cannot create a
+// second handle.
+
+/// Open the permanent non-diverting WinDivert handle that keeps the driver
+/// loaded for the app lifetime.
+///
+/// On Windows builds with the `windivert-redirect` feature this opens one
+/// WinDivert handle with the `"false"` filter (network layer, priority 0,
+/// normal flags): it diverts no traffic and spawns no threads, it only keeps the
+/// WinDivert driver/service loaded so a normal interception Stop/start never
+/// unloads and reloads it. Call it before the first interceptor start.
+///
+/// Idempotent: when a pin is already held it returns `Ok(())` without opening a
+/// second handle, so Optimize may call it unconditionally. A normal interception
+/// stop closes the intercept/inject/shadow handles and leaves the pin open;
+/// only [`release_driver_pin`] (or process exit) closes it.
+///
+/// The pin is not a pause gate: it holds no traffic and does not replace the
+/// per-session intercept/inject handles.
+///
+/// # Errors
+///
+/// `Err(String)` carries the actionable remedy - not elevated, driver
+/// missing/blocked, or a persistent stale WFP state. A `FWP_E_IN_USE`
+/// (`0x8032000A`) failure with no pin held is retried a small bounded number of
+/// times with backoff first; if the stale state survives the budget the error
+/// is reported, never hidden.
+///
+/// On non-Windows builds and builds without `windivert-redirect` there is no
+/// driver to keep loaded: this is a no-op returning `Ok(())`.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub fn pin_driver() -> Result<(), String> {
+    windivert_handle::pin_driver()
+}
+
+/// Close the pinned WinDivert driver handle opened by [`pin_driver`].
+///
+/// Idempotent and safe to call when no pin is held. Call it once at explicit app
+/// shutdown, AFTER the last interceptor session has stopped: the normal Stop
+/// path deliberately leaves the pin open so the driver stays loaded between
+/// sessions. Process exit also releases the handle.
+///
+/// On non-Windows builds and builds without `windivert-redirect` this is a
+/// no-op.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub fn release_driver_pin() {
+    windivert_handle::release_driver_pin()
+}
+
+/// Whether the permanent driver pin opened by [`pin_driver`] is currently held.
+///
+/// `true` only while the app-lifetime pin handle is open: a normal interception
+/// stop leaves it `true`, and [`release_driver_pin`] (or process exit) makes it
+/// `false`. Always `false` on builds without WinDivert.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub fn driver_pin_active() -> bool {
+    windivert_handle::driver_pin_active()
+}
+
+/// Open the permanent non-diverting WinDivert handle (no-op on this build).
+///
+/// There is no WinDivert driver to keep loaded on a non-Windows or
+/// non-`windivert-redirect` build, so this always returns `Ok(())`. The
+/// function exists unconditionally so engine code compiles and runs everywhere.
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub fn pin_driver() -> Result<(), String> {
+    Ok(())
+}
+
+/// Close the pinned WinDivert driver handle (no-op on this build).
+///
+/// Idempotent and always a no-op: this build holds no driver pin.
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub fn release_driver_pin() {}
+
+/// Whether the permanent driver pin is held (always `false` on this build).
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub fn driver_pin_active() -> bool {
+    false
+}
+
+/// Per-kind WinDivert handle lifecycle counters, for tests and evidence runs.
+///
+/// Exposed from the backend's owned-handle module; see
+/// [`windivert_handle::windivert_handle_stats`]. The verification harness can
+/// also count the `WinDivert handle open:` / `WinDivert handle close:` log lines
+/// by `kind`. `allow` because this is the public status surface: the binary
+/// target's module tree re-exports it without using it.
+#[allow(unused_imports)]
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub use windivert_handle::{
+    windivert_handle_stats, HandleCounts, HandleKind, WindivertHandleStats,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1265,5 +1388,27 @@ mod tests {
         let s = r.to_string();
         assert!(s.contains("UDP"));
         assert!(s.contains("1.2.3.4:28015"));
+    }
+
+    // ── Pinned driver integration API ─────────────────────────────────────
+
+    /// On builds with no WinDivert driver, the integration API must be a no-op
+    /// that engine code can still call unconditionally: `Ok`, never pinned, and
+    /// `release` safe to repeat. (On a WinDivert build the real pin is covered
+    /// by the ignored real-driver test in `windivert_handle`; no unit test may
+    /// open the driver.)
+    #[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+    #[test]
+    fn the_driver_pin_api_is_a_no_op_where_windivert_is_not_built() {
+        assert!(!driver_pin_active());
+        assert_eq!(pin_driver(), Ok(()));
+        assert_eq!(pin_driver(), Ok(()), "the no-op pin is idempotent");
+        assert!(
+            !driver_pin_active(),
+            "a build with no driver never reports a held pin"
+        );
+        release_driver_pin();
+        release_driver_pin();
+        assert!(!driver_pin_active());
     }
 }

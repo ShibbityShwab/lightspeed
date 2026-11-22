@@ -203,15 +203,24 @@ impl AppCore {
         })
     }
 
-    /// Stop every tunnel backend (interceptor, WinDivert, capture, redirect).
+    /// Stop every tunnel backend: a true Stop.
+    ///
+    /// The diverting intercept/inject/shadow handles close through the normal
+    /// interceptor teardown; the process-wide driver pin stays held for the next
+    /// Optimize. A teardown that cannot be acknowledged is the Tunnel taxonomy
+    /// error and latches the engine fail-closed until restart.
     pub fn stop_boost(&mut self) -> Result<(), AppError> {
-        self.run(SessionCommand::StopBoost, |engine| {
-            engine.stop_interceptor();
-            engine.stop_windivert();
-            engine.stop_capture();
-            engine.stop_redirect();
-            Ok(())
-        })
+        self.run(SessionCommand::StopBoost, |engine| engine.stop_boost())
+    }
+
+    /// Explicit session shutdown: the true Stop, then release the driver pin.
+    ///
+    /// Only a Quit/exit path calls this. A user Stop must use [`Self::stop_boost`]
+    /// so the pin survives to make the next Optimize cheap. An unclean teardown
+    /// is returned as the Tunnel taxonomy error so a caller about to hand the
+    /// process away (self-update) can refuse instead of killing a live filter.
+    pub fn shutdown(&mut self) -> Result<(), AppError> {
+        self.run(SessionCommand::StopBoost, |engine| engine.shutdown())
     }
 
     /// Stop the interceptor but keep the session's control-plane registration.
@@ -461,5 +470,18 @@ mod tests {
             core.commands_mut().session().in_flight.is_none(),
             "returning the switch handle must settle the in-flight command marker"
         );
+    }
+
+    #[test]
+    fn the_shutdown_command_settles_the_slot() {
+        let (_runtime, mut core) = session_core();
+        // The Quit path: the true Stop runs and the (never-taken) pin release is
+        // a no-op. The command slot must settle, or the next frame shows STARTING
+        // on a process that is about to exit.
+        core.commands_mut()
+            .shutdown()
+            .expect("a fresh engine shuts down cleanly");
+        assert!(core.commands_mut().session().in_flight.is_none());
+        assert!(core.commands_mut().session().last_error.is_none());
     }
 }

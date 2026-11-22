@@ -484,6 +484,30 @@ pub struct EngineStatus {
     pub bypass_hold: u64,
 }
 
+impl EngineStatus {
+    /// Whether any tunnel backend is currently carrying the game's traffic.
+    ///
+    /// One definition, because the rail, the tray and the route surface must
+    /// not disagree about whether the client is "on". It moved out of the GUI
+    /// with the true-Stop lifecycle so a front end cannot re-derive it.
+    pub fn any_data_plane_active(&self) -> bool {
+        self.interceptor_active
+            || self.windivert_active
+            || self.capture_active
+            || self.redirect_active
+    }
+
+    /// The `Relayed` row's sent counter for whichever backend is running.
+    pub fn session_sent(&self) -> Option<u64> {
+        crate::app::status::routed_count(
+            self.redirect_active,
+            self.redirect_pkts_out,
+            self.interceptor_active,
+            self.interceptor_tunnel_sent,
+        )
+    }
+}
+
 // ── Engine ───────────────────────────────────────────────────────────────
 
 type Shared = Arc<RwLock<EngineStatus>>;
@@ -509,6 +533,48 @@ pub(crate) fn write_or_recover<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 /// Matches the client config default (`proxy.quic_port`); self-hosted relays on
 /// another port call [`LightSpeedEngine::set_control_port`].
 pub const DEFAULT_CONTROL_PORT: u16 = 4433;
+
+/// Why a start/stop is refused after a teardown timed out (the fail-closed latch).
+const TEARDOWN_INCOMPLETE: &str = "previous interception did not shut down cleanly; restart \
+     LightSpeed before starting again";
+
+/// The `EngineStatus` copy of [`TEARDOWN_INCOMPLETE`], shown by the Error row.
+const TEARDOWN_INCOMPLETE_STATUS: &str = "Previous interception did not shut down cleanly. \
+     Restart LightSpeed before starting again so its WinDivert filter can be released.";
+
+/// The process-wide driver pin seam.
+///
+/// The pinned-driver backend exposes three free functions
+/// (`crate::interceptor::{pin_driver, release_driver_pin, driver_pin_active}`);
+/// the engine owns their lifecycle and this trait is the test seam that keeps
+/// unit tests off a real WinDivert handle. The pin is deliberately **not** a
+/// diverting handle: it keeps the driver loaded across Stop/Start churn while
+/// owning no filter and no tunnel.
+trait DriverPin: Send {
+    /// Open (or confirm) the process-wide non-diverting pin handle.
+    fn pin(&mut self) -> Result<(), String>;
+    /// Close the pin handle. Idempotent by contract.
+    fn release(&mut self);
+    /// Whether a pin handle is currently open in this process.
+    fn active(&self) -> bool;
+}
+
+/// The production pin: the backend's process-wide contract, verbatim.
+struct ProcessDriverPin;
+
+impl DriverPin for ProcessDriverPin {
+    fn pin(&mut self) -> Result<(), String> {
+        crate::interceptor::pin_driver()
+    }
+
+    fn release(&mut self) {
+        crate::interceptor::release_driver_pin();
+    }
+
+    fn active(&self) -> bool {
+        crate::interceptor::driver_pin_active()
+    }
+}
 
 /// Manages the keepalive loop, optional game redirect, and optional pcap capture.
 /// Designed for use from GUI code running outside a Tokio context.
@@ -544,6 +610,16 @@ pub struct LightSpeedEngine {
     /// clear). This is what keeps a timed-out teardown from becoming the next
     /// `FWP_E_IN_USE`.
     interceptor_teardown_incomplete: bool,
+    /// The process-wide non-diverting driver pin (pinned-driver backend).
+    ///
+    /// Opened before the first diverting start, survives every Stop, and is
+    /// closed only by [`Self::shutdown`]/Drop. It is what lets a true Stop close
+    /// the intercept/inject/shadow handles without the next Optimize paying a
+    /// full driver load; it diverts no traffic and owns no tunnel.
+    driver_pin: Box<dyn DriverPin>,
+    /// True once this engine has asked for the pin. Kept so a Stop never
+    /// releases it and a repeated start never pins twice.
+    driver_pinned: bool,
     /// Effective path-MTU cap for the tunnel (`[tunnel] mtu` / `--mtu`),
     /// applied to every interceptor start. Defaults to the conservative clamp.
     path_mtu_cap: usize,
@@ -583,6 +659,8 @@ impl LightSpeedEngine {
             windivert_stat_slot: None,
             interceptor_handle: None,
             interceptor_teardown_incomplete: false,
+            driver_pin: Box::new(ProcessDriverPin),
+            driver_pinned: false,
             path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             hold_watch: None,
             telemetry_flush: None,
@@ -1677,18 +1755,26 @@ impl LightSpeedEngine {
     /// here with the backend's own reason and nothing is started, which is where
     /// the shipped path refused too.
     pub fn start_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
+        // Fail closed FIRST, before anything reads the handle: a timed-out
+        // teardown takes the handle, so `handle.is_some()` is not evidence the
+        // kernel filter is clear. This must stay the very first statement.
+        if self.interceptor_teardown_incomplete {
+            return Err(TEARDOWN_INCOMPLETE.to_string());
+        }
         // Refuse an unavailable plan before touching a running session: a plan
         // that cannot start must not tear down the current one.
         if let Err(reason) = &plan.facts.available {
             return Err(reason.clone());
         }
+        // The pin must exist before the first diverting handle opens. Stop keeps
+        // it, so only the first start of a process pays the driver load.
+        self.ensure_driver_pinned()?;
         // The plan path is public and is called directly by the live modes. It
-        // must not assume the caller stopped the previous run first.
+        // must not assume the caller stopped the previous run first. A handle
+        // whose data plane died (`run_failed`) is torn down here too: a dead
+        // session is never resumed in place by this engine.
         if self.interceptor_handle.is_some() && !self.stop_interceptor() {
-            return Err(
-                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
-                    .to_string(),
-            );
+            return Err(TEARDOWN_INCOMPLETE.to_string());
         }
         let InterceptorPlan {
             interceptor,
@@ -1727,10 +1813,16 @@ impl LightSpeedEngine {
         // which panic with "there is no reactor running" from a non-Tokio
         // thread (e.g. the egui UI loop). `start()` is synchronous and only
         // spawns tasks, so `block_on` enters the context and returns at once.
-        let handle = self
-            .rt
-            .block_on(async move { interceptor.start(config) })
-            .map_err(|e| e.to_string())?;
+        let handle = match self.rt.block_on(async move { interceptor.start(config) }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                // A failed start must drain the registration this plan just
+                // spawned; otherwise every failed attempt leaves a supervisor
+                // retrying a relay nothing is using.
+                self.stop_supervised();
+                return Err(error.to_string());
+            }
+        };
 
         {
             let mut s = write_or_recover(&self.status);
@@ -1848,6 +1940,41 @@ impl LightSpeedEngine {
         }
     }
 
+    /// Open the process-wide driver pin before the first diverting handle.
+    ///
+    /// The pin is a non-diverting handle: it owns no filter and no tunnel, so
+    /// it may stay open across a whole session. It is opened once per engine
+    /// (the backend is idempotent, and `driver_pinned` avoids even the call).
+    fn ensure_driver_pinned(&mut self) -> Result<(), String> {
+        if self.driver_pinned {
+            return Ok(());
+        }
+        self.driver_pin
+            .pin()
+            .map_err(|error| format!("cannot pin the interception driver: {error}"))?;
+        self.driver_pinned = true;
+        tracing::info!(
+            "Interception driver pinned with a non-diverting handle; Stop keeps it loaded"
+        );
+        Ok(())
+    }
+
+    /// Whether this engine holds the process-wide driver pin.
+    ///
+    /// The pin survives a true Stop by design: it is what the next Optimize
+    /// reuses. Only an explicit [`Self::shutdown`] releases it.
+    pub fn driver_pin_active(&self) -> bool {
+        self.driver_pinned || self.driver_pin.active()
+    }
+
+    /// Release the pin. Only an explicit engine/app shutdown may call this.
+    fn release_driver_pin(&mut self) {
+        if std::mem::take(&mut self.driver_pinned) {
+            self.driver_pin.release();
+            tracing::info!("Interception driver pin released after handle teardown");
+        }
+    }
+
     /// What the start line names: the process a target set, else the game key.
     ///
     /// A process target is not the game key. The caller passes a fallback key only
@@ -1869,6 +1996,9 @@ impl LightSpeedEngine {
     /// is latched: a later start must fail closed rather than open a second
     /// filter next to a filter that may still be registered.
     pub fn stop_interceptor(&mut self) -> bool {
+        // A stopped run must never have its hold released later: the watcher
+        // would flip a switch on a session that no longer exists.
+        self.stop_hold_watch();
         self.stop_supervised();
         let had_handle = self.interceptor_handle.is_some();
         let mut stopped = true;
@@ -1890,12 +2020,7 @@ impl LightSpeedEngine {
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
             if !stopped {
-                s.interceptor_error = Some(
-                    "Previous interception did not shut down cleanly. Restart \
-                     LightSpeed before starting again so its WinDivert filter \
-                     can be released."
-                        .to_string(),
-                );
+                s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
         }
         stopped && !self.interceptor_teardown_incomplete
@@ -1910,15 +2035,13 @@ impl LightSpeedEngine {
     /// [`Self::stop_interceptor`] (the GUI/shared path) ends the registration
     /// with the data plane. No log line is emitted here; the caller owns it.
     pub fn stop_interceptor_keep_registration(&mut self, timeout: Duration) -> bool {
+        // The data plane is gone, so a pending hold watcher has no gate left to
+        // release: cancel it with the run it belonged to.
+        self.stop_hold_watch();
         if self.interceptor_teardown_incomplete {
             if let Ok(mut s) = self.status.write() {
                 s.interceptor_active = false;
-                s.interceptor_error = Some(
-                    "Previous interception did not shut down cleanly. Restart \
-                     LightSpeed before starting again so its WinDivert filter \
-                     can be released."
-                        .to_string(),
-                );
+                s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
             return false;
         }
@@ -1935,15 +2058,53 @@ impl LightSpeedEngine {
         if let Ok(mut s) = self.status.write() {
             s.interceptor_active = false;
             if !stopped {
-                s.interceptor_error = Some(
-                    "Previous interception did not shut down cleanly. Restart \
-                     LightSpeed before starting again so its WinDivert filter \
-                     can be released."
-                        .to_string(),
-                );
+                s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
         }
         stopped
+    }
+
+    /// A true Stop: close every diverting backend through its normal teardown.
+    ///
+    /// The driver pin is deliberately kept: it owns no filter and the next
+    /// Optimize reuses the loaded driver. Nothing here pauses, diverts, or keeps
+    /// a warm diverting handle alive — a stopped engine has no interceptor
+    /// handle at all, and its hold watcher is cancelled.
+    ///
+    /// `Err` means the interceptor teardown timed out; the fail-closed latch is
+    /// already set, so a later start is refused until the process restarts.
+    pub fn stop_boost(&mut self) -> Result<(), String> {
+        let stopped = self.stop_interceptor();
+        self.stop_windivert();
+        self.stop_capture();
+        self.stop_redirect();
+        if stopped {
+            Ok(())
+        } else {
+            Err(TEARDOWN_INCOMPLETE.to_string())
+        }
+    }
+
+    /// Explicit engine/app shutdown: a full Stop, then release the driver pin.
+    ///
+    /// This is the only path (besides [`Drop`]) that releases the pin. It runs
+    /// after handle teardown, never before, so the release cannot race a filter
+    /// that is still closing. `Err` reports an unclean Stop exactly as
+    /// [`Self::stop_boost`] does; a caller about to exit (Quit) or hand the
+    /// process to an installer (self-update) treats it as a refusal.
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        self.stop_hold_watch();
+        let stopped = self.stop_interceptor();
+        self.stop_windivert();
+        self.stop_capture();
+        self.stop_redirect();
+        self.disconnect();
+        self.release_driver_pin();
+        if stopped {
+            Ok(())
+        } else {
+            Err(TEARDOWN_INCOMPLETE.to_string())
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -2088,11 +2249,10 @@ fn wait_for_redirect_ack(ack: Option<std::sync::mpsc::Receiver<()>>, timeout: Du
 
 impl Drop for LightSpeedEngine {
     fn drop(&mut self) {
-        self.stop_interceptor();
-        self.stop_windivert();
-        self.stop_capture();
-        self.stop_redirect();
-        self.disconnect();
+        // Dropping the engine is the owner's shutdown (CLI end-of-run, a test
+        // engine, or the last GUI handle at process exit): full Stop first, then
+        // release the pin so a process that keeps living does not leak it.
+        let _ = self.shutdown();
     }
 }
 
@@ -2206,12 +2366,14 @@ mod tests {
 
     use super::{
         apply_registration_result, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
-        InterceptorRequest, LightSpeedEngine, RedirectOptions, DEFAULT_CONTROL_PORT,
+        InterceptorFacts, InterceptorPlan, InterceptorRequest, LightSpeedEngine, RedirectOptions,
+        DEFAULT_CONTROL_PORT,
     };
     use crate::interceptor::{
         mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
     };
     use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::sync::{Arc, Mutex};
 
     fn test_engine() -> LightSpeedEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2734,5 +2896,329 @@ mod tests {
             "a failed switch must not publish the candidate relay"
         );
         assert!(!engine.snapshot().control_registered);
+    }
+
+    // ── True-Stop lifecycle and the pinned driver (task-106) ─────────────
+
+    /// The test seam for the process-wide pin: records every call in one log,
+    /// shared with the interceptor double so the start order is observable.
+    struct RecordingPin {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        active: bool,
+        fail: bool,
+    }
+
+    impl super::DriverPin for RecordingPin {
+        fn pin(&mut self) -> Result<(), String> {
+            self.log.lock().expect("pin log").push("pin");
+            if self.fail {
+                return Err("mock pin refused (elevation required)".to_string());
+            }
+            self.active = true;
+            Ok(())
+        }
+
+        fn release(&mut self) {
+            self.log.lock().expect("pin log").push("release");
+            self.active = false;
+        }
+
+        fn active(&self) -> bool {
+            self.active
+        }
+    }
+
+    /// A backend double that records its start in the same log.
+    struct LoggingMock {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        fail: bool,
+    }
+
+    impl TrafficInterceptor for LoggingMock {
+        fn platform_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn check_availability(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn start(
+            &self,
+            config: InterceptorConfig,
+        ) -> anyhow::Result<crate::interceptor::InterceptorHandle> {
+            self.log.lock().expect("pin log").push("start");
+            if self.fail {
+                anyhow::bail!("mock start refused");
+            }
+            let mut handle = MockInterceptor::new().start(config)?;
+            handle.attach_tunnelling_switch(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+            Ok(handle)
+        }
+    }
+
+    /// An engine whose driver pin is the recording double (never WinDivert), plus
+    /// the runtime it needs alive for `Handle::spawn` to accept the registration
+    /// and hold-watcher tasks.
+    fn engine_with_recording_pin(
+        pin_fails: bool,
+    ) -> (
+        tokio::runtime::Runtime,
+        LightSpeedEngine,
+        Arc<Mutex<Vec<&'static str>>>,
+    ) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime for engine test");
+        let mut engine = LightSpeedEngine::new(rt.handle().clone());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        engine.driver_pin = Box::new(RecordingPin {
+            log: Arc::clone(&log),
+            active: false,
+            fail: pin_fails,
+        });
+        (rt, engine, log)
+    }
+
+    /// A plan for the logging double. The relay is an unlistenable loopback port
+    /// so the spawned registration never becomes a real session.
+    fn logging_plan(log: &Arc<Mutex<Vec<&'static str>>>, fail: bool) -> InterceptorPlan {
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1);
+        InterceptorPlan {
+            interceptor: Box::new(LoggingMock {
+                log: Arc::clone(log),
+                fail,
+            }),
+            config: InterceptorConfig {
+                game_name: "Test".to_string(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                capture_tcp_ports: None,
+                process_names: Vec::new(),
+                process_target: None,
+                port_range: (1000, 2000),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                initial_routes: Vec::new(),
+                proxy_addr: relay,
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: Default::default(),
+                bypass: Default::default(),
+            },
+            facts: InterceptorFacts {
+                game_key: "test".to_string(),
+                game_name: "Test".to_string(),
+                ports: (1000, 2000),
+                process_names: Vec::new(),
+                path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                platform: "mock",
+                routes: Vec::new(),
+                port_range: (1000, 2000),
+                server_override: None,
+                adaptive: AdaptivePolicy::default(),
+                available: Ok(()),
+            },
+            relay,
+            announce_start: false,
+        }
+    }
+
+    fn log_of(log: &Arc<Mutex<Vec<&'static str>>>) -> Vec<&'static str> {
+        log.lock().expect("pin log").clone()
+    }
+
+    #[test]
+    fn the_driver_pin_is_held_before_the_first_diverting_handle_opens() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("the logging plan starts");
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start"],
+            "the pin must be held before the first diverting handle (and once)"
+        );
+        assert!(engine.driver_pin_active());
+        assert!(engine.is_intercepting());
+        engine.stop_boost().expect("a mock stop is clean");
+    }
+
+    #[test]
+    fn a_true_stop_closes_the_diverting_handle_and_keeps_the_pin() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("first start");
+        engine.stop_boost().expect("stop is clean");
+
+        assert!(
+            engine.interceptor_handle.is_none(),
+            "a true Stop must not leave a warm diverting handle behind"
+        );
+        assert!(
+            !engine.snapshot().interceptor_active,
+            "a stopped run must not report an active interceptor"
+        );
+        assert!(
+            engine.driver_pin_active(),
+            "Stop must keep the pin: only an explicit shutdown releases it"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start"],
+            "Stop must not release the pin"
+        );
+
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("a later Optimize opens a fresh handle over the held pin");
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start", "start"],
+            "the pin is opened once per process, not once per Optimize"
+        );
+        engine.stop_boost().expect("clean stop");
+    }
+
+    #[test]
+    fn an_explicit_shutdown_releases_the_pin_after_the_handles_are_closed() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("start");
+        engine.shutdown().expect("a mock shutdown is clean");
+
+        assert!(engine.interceptor_handle.is_none());
+        assert!(
+            !engine.driver_pin_active(),
+            "Quit must release the driver pin"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start", "release"],
+            "the release is the last lifecycle step, never before the stop"
+        );
+    }
+
+    #[test]
+    fn a_pin_failure_refuses_the_start_before_any_diverting_handle() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(true);
+        let error = engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect_err("an unpinnable driver must refuse the start");
+        assert!(
+            error.contains("pin"),
+            "the refusal must name the pin, got: {error}"
+        );
+        assert!(
+            engine.interceptor_handle.is_none(),
+            "a refused start must not open a handle"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin"],
+            "nothing may start after the pin is refused"
+        );
+        assert!(!engine.driver_pin_active());
+    }
+
+    #[test]
+    fn a_latched_teardown_refuses_the_start_before_the_handle_check() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine.interceptor_teardown_incomplete = true;
+        // The bypass this pins: a timed-out teardown takes the handle, so a
+        // `handle.is_some()`-first check would happily open a second filter.
+        assert!(engine.interceptor_handle.is_none());
+        let error = engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect_err("a latched engine must refuse every start");
+        assert!(
+            error.contains("did not shut down cleanly"),
+            "the refusal must name the latch, got: {error}"
+        );
+        assert!(
+            log_of(&log).is_empty(),
+            "a latched start must open nothing (no pin, no handle)"
+        );
+        assert!(engine.interceptor_handle.is_none());
+    }
+
+    #[test]
+    fn a_failed_start_drains_the_registration_supervisor_it_spawned() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        for attempt in 0..3 {
+            let error = engine
+                .start_interceptor_plan(logging_plan(&log, true))
+                .expect_err("the mock start fails");
+            assert!(error.contains("refused"), "got: {error}");
+            assert!(
+                engine.supervised_paths.is_empty(),
+                "failed start {attempt} left a registration supervisor behind"
+            );
+        }
+        assert!(
+            engine.interceptor_handle.is_none(),
+            "no failed attempt may leave a handle"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start", "start", "start"],
+            "each failed attempt reaches the backend but never opens a handle"
+        );
+    }
+
+    #[test]
+    fn a_stopped_run_leaves_no_hold_watcher_armed() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("start");
+        assert!(engine.hold_tunnelling(), "the mock handle has a gate");
+        assert!(engine.release_hold_when_connected(|| false));
+        assert!(
+            engine.hold_watch.is_some(),
+            "the hold watcher must be armed for this test to mean anything"
+        );
+
+        engine.stop_boost().expect("clean stop");
+        assert!(
+            engine.hold_watch.is_none(),
+            "Stop must cancel the hold watcher; a stopped run must never be released by it"
+        );
+        assert!(
+            !engine.hold_tunnelling(),
+            "there is no live session left to hold or release"
+        );
+    }
+
+    #[test]
+    fn a_dead_data_plane_never_reads_as_intercepting_and_a_start_replaces_it() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("start");
+        engine
+            .interceptor_handle
+            .as_ref()
+            .expect("a live handle")
+            .counters
+            .run_failed
+            .store(true, Ordering::Relaxed);
+
+        assert!(
+            !engine.is_intercepting(),
+            "the tunnel-liveness signal must make a dead data plane read as not intercepting"
+        );
+        assert!(!engine.snapshot().interceptor_active);
+
+        // A dead handle is replaced through the normal teardown, never resumed
+        // in place: the old handle is gone and a new backend start happened.
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("a start over a dead data plane tears it down and starts fresh");
+        assert!(engine.is_intercepting());
+        assert_eq!(log_of(&log), vec!["pin", "start", "start"]);
+        engine.stop_boost().expect("clean stop");
     }
 }

@@ -95,7 +95,7 @@ use super::teardown::{recv_should_break, TeardownAck, ERROR_INVALID_HANDLE};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use super::traits::{InterceptorCounters, PlatformTeardown, Route};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-use super::windivert_handle::{is_fwp_in_use, OwnedHandle};
+use super::windivert_handle::{driver_open_remedy, is_fwp_in_use, HandleKind, OwnedHandle};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 use crate::capture::windivert_redirect::{build_ipv4_udp, parse_ipv4_tcp, parse_ipv4_udp};
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
@@ -1057,6 +1057,23 @@ impl TrafficInterceptor for WinDivertInterceptor {
         use std::collections::HashMap;
         use tokio::net::UdpSocket;
 
+        // ── Pinned driver: open the permanent non-diverting handle FIRST ──
+        //
+        // The pin keeps the WinDivert driver/service loaded across the
+        // intercept/inject/shadow open+close churn of a normal Stop/start, which
+        // is what prevents the unload/reload race that left a WFP filter
+        // registered (the next open's `FWP_E_IN_USE`). It is idempotent: the
+        // engine normally pins once before the first start and releases at app
+        // shutdown, and a caller that skipped the pin still gets the driver held
+        // for this session. A pin failure is not fatal here: the diverting
+        // opens below report their own failure with the actionable remedy, and
+        // a session that cannot open its diverting handles fails closed.
+        if let Err(reason) = super::pin_driver() {
+            tracing::warn!(
+                "WinDivert driver pin unavailable; starting without a pinned driver: {reason}"
+            );
+        }
+
         let config_proxy = config.proxy_addr;
         let dynamic_server = config.dynamic_server;
         let route_set: Vec<SocketAddrV4> = config.initial_routes.iter().map(|r| r.remote).collect();
@@ -1152,7 +1169,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // Open intercept handle (captures matching outbound packets).
         tracing::info!("⚡ Opening WinDivert intercept handle...");
-        let wd_intercept = match OwnedHandle::open(
+        let wd_intercept = match OwnedHandle::open_with_pin_retry(
+            HandleKind::Intercept,
             &out_filter,
             WinDivertLayer::Network,
             0,
@@ -1169,20 +1187,29 @@ impl TrafficInterceptor for WinDivertInterceptor {
         };
 
         // Open inject handle (write-only for injecting inbound spoofs).
+        // Shape pinned to 1.12.4: filter `"false"` and NORMAL flags. Do not add
+        // `send_only` (1.12.3 regression, rolled back) and do not add `sniff`
+        // (which would make the handle read-only and silently break
+        // `WinDivertSend`).
         tracing::info!("⚡ Opening WinDivert inject handle...");
-        let wd_inject =
-            match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
-                Ok(h) => {
-                    tracing::info!("✅ WinDivert inject handle opened successfully");
-                    Arc::new(h)
-                }
-                Err(e) => {
-                    log_open_failure("inject", &e);
-                    // Close the already-open intercept handle before returning.
-                    let _ = wd_intercept.close();
-                    return Err(anyhow::anyhow!(driver_open_remedy(&e)));
-                }
-            };
+        let wd_inject = match OwnedHandle::open_with_pin_retry(
+            HandleKind::Inject,
+            "false",
+            WinDivertLayer::Network,
+            0,
+            WinDivertFlags::new(),
+        ) {
+            Ok(h) => {
+                tracing::info!("✅ WinDivert inject handle opened successfully");
+                Arc::new(h)
+            }
+            Err(e) => {
+                log_open_failure("inject", &e);
+                // Close the already-open intercept handle before returning.
+                let _ = wd_intercept.close();
+                return Err(anyhow::anyhow!(driver_open_remedy(&e)));
+            }
+        };
 
         // Open a shadow-direct inbound handle. It is a sniff handle (copy, never
         // divert), so it observes replies from a tracked game server to a
@@ -1195,7 +1222,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
             "🔀 WinDivert shadow-direct inbound filter: {}",
             shadow_filter
         );
-        let wd_shadow: Option<Arc<OwnedHandle>> = match OwnedHandle::open(
+        let wd_shadow: Option<Arc<OwnedHandle>> = match OwnedHandle::open_with_pin_retry(
+            HandleKind::Shadow,
             &shadow_filter,
             WinDivertLayer::Network,
             0,
@@ -2259,7 +2287,8 @@ impl TrafficInterceptor for WinDivertInterceptor {
         // Close the handles synchronously after every owner thread ack, so a
         // relay switch cannot open a new filter while the old one is still
         // registered (FWP_E_IN_USE) or let a late Arc drop close a recycled
-        // handle value used by the next session.
+        // handle value used by the next session. The pinned driver handle is
+        // NOT in this set: it belongs to the process, not to the session.
         let close_handles = {
             let wd_ic = Arc::clone(&wd_intercept);
             let wd_inj = Arc::clone(&wd_inject);
@@ -2276,6 +2305,16 @@ impl TrafficInterceptor for WinDivertInterceptor {
                         tracing::warn!("WinDivert shadow close failed: {e}");
                     }
                 }
+                // The pinned driver handle is deliberately NOT closed here.
+                // A normal Stop closes the intercept/inject/shadow handles and
+                // leaves the pin - and therefore the loaded WinDivert driver -
+                // in place for the next Optimize. Only the explicit
+                // `release_driver_pin()` at app shutdown closes it. Logging the
+                // invariant makes a Stop/start evidence run check it directly.
+                tracing::info!(
+                    "WinDivert diverting handles closed; driver pin active={}",
+                    super::driver_pin_active()
+                );
             }
         };
         let teardown = PlatformTeardown::with_close(
@@ -2322,6 +2361,10 @@ impl TrafficInterceptor for WinDivertInterceptor {
 /// down; the owner threads then exit and the last `Arc<OwnedHandle>` drop
 /// closes the handle, so a failed start cannot leak WFP state. On success
 /// `disarm` hands the handles to the running session.
+///
+/// The pinned driver handle is not part of this guard: it is process-owned and
+/// deliberately survives both a failed start and a normal stop, so only
+/// `release_driver_pin()` (or process exit) closes it.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 struct HandleShutdownGuard {
     intercept: Arc<OwnedHandle>,
@@ -2383,37 +2426,6 @@ fn log_open_failure(handle_role: &str, err: &std::io::Error) {
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn is_actionable_driver_failure(err: &std::io::Error) -> bool {
     is_fwp_in_use(err) || matches!(err.raw_os_error(), Some(5) | Some(577) | Some(1275))
-}
-
-/// A user-facing remedy for a driver open failure.
-///
-/// These are the failures where "try again" is not advice: each one names the
-/// actual next action. The raw error is kept at the end so support logs remain
-/// searchable.
-#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
-fn driver_open_remedy(err: &std::io::Error) -> String {
-    if is_fwp_in_use(err) {
-        return format!(
-            "WinDivert has a stale WFP filter from a previous run. Close any stale \
-             LightSpeed process and restart Windows to clear it before retrying. ({err})"
-        );
-    }
-    match err.raw_os_error() {
-        Some(5) => format!(
-            "WinDivert requires Administrator privileges. Restart LightSpeed as \
-             administrator. ({err})"
-        ),
-        Some(577) => format!(
-            "The WinDivert driver signature is not valid on this machine. Reinstall \
-             LightSpeed from the official release or check security software. ({err})"
-        ),
-        Some(1275) => format!(
-            "The WinDivert driver is blocked on this machine (driver blocklist, \
-             security software, or virtualization). Allow WinDivert or use a supported \
-             host. ({err})"
-        ),
-        _ => format!("WinDivert driver open failed: {err}"),
-    }
 }
 
 /// Record the state left behind by a receive loop that died on a permanent

@@ -1,30 +1,23 @@
 //! In-place installer for receipt-less installs.
 //!
 //! The availability check ([`crate::update`]) works everywhere, but replacing
-//! the running binary in place is Windows-only here: the Program Files copy is
-//! how this GUI ships on Windows, and self-replacement needs elevation, which
-//! PowerShell's RunAs verb provides. On other platforms the user updates
-//! through their package manager, and the install path says so.
-//!
-//! The flow, end to end: download the zip and its `.sha256` sibling, verify
-//! the checksum BEFORE anything runs elevated, then hand a pre-written
-//! PowerShell script to an elevated shell that stops the app, extracts the
-//! archive with the built-in `tar` (Windows ships bsdtar, which reads zips),
-//! copies the new exe over the current one, verifies the copy by size, and
-//! relaunches. The calling process exits after the hand-off.
+//! the running binary in place is Windows-only: this GUI ships under Program
+//! Files, and self-replacement needs the elevation PowerShell's RunAs verb
+//! provides. Other platforms update through their package manager.
+//! Flow: download the zip and its `.sha256` sibling, verify the checksum
+//! BEFORE anything runs elevated, then hand a pre-written PowerShell script to
+//! an elevated shell that stops the app, extracts the zip with the built-in
+//! `tar`, copies the new exe over the current one, verifies the copy by size,
+//! and relaunches. The calling process exits after the hand-off.
 
-// `Path` (and the checksum/elevation imports below) are used only by the
-// Windows in-place path: the non-Windows branch of `install_blocking` refuses
-// before it needs a path, a checksum or an elevated script. Each import is
-// Windows-conditional so `-D warnings` stays clean on the Linux/macOS builds; the
-// module itself stays compiled on every target.
+// `Path` and the checksum/elevation imports below are Windows-only: the
+// non-Windows branch of `install_blocking` refuses before it needs them, and
+// each import is `#[cfg(windows)]` so `-D warnings` stays clean elsewhere.
 #[cfg(windows)]
 use std::path::Path;
 
-/// The checksum verification below runs only on the Windows in-place path, so
-/// these imports are Windows-conditional: non-Windows builds return before any
-/// download (see [`install_blocking`]) and would otherwise fail `-D warnings`
-/// on unused imports. The module stays compiled on every target.
+/// Checksum verification runs only on the Windows path, so these imports are
+/// Windows-conditional too (non-Windows returns before any download).
 #[cfg(windows)]
 use sha2::{Digest, Sha256};
 
@@ -42,6 +35,13 @@ pub type InstallOutcome = Result<String, String>;
 /// Run the whole install on the current thread. Blocking; the GUI calls this
 /// from a background thread.
 pub fn install_blocking(asset: ReleaseAsset) -> InstallOutcome {
+    // A held driver pin means the engine was not explicitly shut down; the
+    // elevated script below kills this process, and yanking a live filter is the
+    // one thing a self-update must never do.
+    if lightspeed_client::app::driver_pin_active() {
+        return Err("interception is still active; stop it before updating".into());
+    }
+
     #[cfg(not(windows))]
     {
         let _ = asset;
