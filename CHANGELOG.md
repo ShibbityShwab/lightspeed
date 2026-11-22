@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-22
+
+### Fixed
+
+- **Updated `url` 2.5.9** for RUSTSEC-2026-0592 (stack overflow in
+  `Url::origin()` on nested `blob:` URLs).
+- **Reverted the two handle-shape changes introduced in 1.12.3.** A fresh-boot
+  field run showed that after one successful interception session the next start
+  saw an orphaned WinDivert WFP provider even though no process held a handle;
+  only a driver stop/reboot cleared it. 1.12.4 restores the 1.12.2 handle shape:
+  the inject handle is opened normally again and the sniff preflight handle is
+  removed. The fail-closed teardown latch and live relay exclusion are retained.
+- **The teardown latch clears only after a real interceptor start succeeds.**
+  There is no separate probe handle whose own close could interfere with
+  WinDivert's WFP cleanup.
+- **Handle-close failures are logged** instead of silently discarded, and the
+  start error uses the same actionable administrator/stale-filter/signature/
+  driver-blocked remedies as the former preflight.
+
 ## [1.12.3] - 2026-11-21
 
 ### Fixed
