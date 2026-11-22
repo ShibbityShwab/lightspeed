@@ -323,10 +323,9 @@ pub struct LightSpeedApp<P: Platform> {
     selected_game_idx: usize,
     server_input: String,
     fec_enabled: bool,
-    /// Whether the Npcap capture driver is installed, sampled ONCE at startup.
-    /// It used to be queried per frame (`sc query npcap` - a blocking process
-    /// spawn on the UI thread, and a console-window storm before
-    /// `silent_command`), which made opening Settings hang the window.
+    /// Whether the shipped WinDivert binaries are present, sampled ONCE at
+    /// startup. It used to probe Npcap via `sc query npcap` - a blocked
+    /// dependency and a blocking process spawn on the UI thread.
     capture_available: bool,
     /// Follow the auto-detected game instead of a pinned pick - the Game
     /// field's "Auto (detect)", on by default like the relay's auto-select.
@@ -3861,17 +3860,17 @@ impl<P: Platform> LightSpeedApp<P> {
         } else {
             "idle"
         };
-        let npcap = if self.capture_available {
-            "installed"
+        let driver = if self.capture_available {
+            "WinDivert files present"
         } else {
-            "not installed (pcap fallback only)"
+            "WinDivert missing"
         };
         let relays = format!("{} configured", self.proxies.len());
         for (label, value) in [
             ("Version", env!("CARGO_PKG_VERSION")),
             ("Elevation", admin),
             ("Capture", capture),
-            ("Npcap", npcap),
+            ("Driver", driver),
             ("Relays", relays.as_str()),
         ] {
             console_mini_row(ui, label, value);

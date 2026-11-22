@@ -1713,15 +1713,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
-name = "etherparse"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54a48e7bdc36cdf86876a6890c0840957029374ea07f6697c96fa15898730375"
-dependencies = [
- "arrayvec",
-]
-
-[[package]]
 name = "euclid"
 version = "0.22.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2972,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-client"
-version = "1.12.2"
+version = "1.12.3"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3007,7 +2998,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-gui"
-version = "1.12.2"
+version = "1.12.3"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3026,12 +3017,11 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "webbrowser",
- "windivert",
 ]
 
 [[package]]
 name = "lightspeed-protocol"
-version = "1.12.2"
+version = "1.12.3"
 dependencies = [
  "bytes",
  "criterion",
@@ -3045,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "lightspeed-proxy"
-version = "1.12.2"
+version = "1.12.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6709,18 +6699,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "windivert"
-version = "0.7.0-beta.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bbb7dcc054cce9781ee0d258fa4115182bdc3fc8706350476d4ce96206daed9"
-dependencies = [
- "etherparse",
- "thiserror 2.0.21",
- "windivert-sys",
- "windows 0.62.2",
-]
 
 [[package]]
 name = "windivert-sys"

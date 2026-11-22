@@ -372,7 +372,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // compact footer row arithmetic, canonical-table dispatch, tray-gated effects);
     // 2957 -> 3137. WF-081b (Q5): the declined-notice assertion became
     // translation-aware; integrated count 3153.
-    ("client-gui/src/app/tests.rs", 3216),
+    ("client-gui/src/app/tests.rs", 3211),
     ("client-gui/src/app/theme.rs", 257),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
@@ -398,7 +398,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4733),
+    ("client-gui/src/app.rs", 4732),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -439,7 +439,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // toggle makes (`autostart_installed`/`set_autostart`), with the observable
     // truth and surfaced-error contracts documented. 227 -> 246.
     ("client-gui/src/platform/mod.rs", 246),
-    ("client-gui/src/platform/windows.rs", 481),
+    ("client-gui/src/platform/windows.rs", 484),
     ("client-gui/src/processes.rs", 282),
     ("client-gui/src/relay_history.rs", 15),
     // W2-3b S6: the default-features update check moved to
