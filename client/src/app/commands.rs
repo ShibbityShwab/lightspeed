@@ -203,7 +203,23 @@ impl AppCore {
         })
     }
 
-    /// Stop every tunnel backend (interceptor, WinDivert, capture, redirect).
+    /// Pause the interceptor without closing its capture handles.
+    ///
+    /// This is the GUI's Stop action. The WinDivert session stays warm and is
+    /// resumed by the next matching start, so repeated Optimize/Stop never
+    /// reopens the driver. Legacy backends without a gate fall back to a full
+    /// stop. Returns whether a session remains held.
+    pub fn pause_boost(&mut self) -> Result<bool, AppError> {
+        self.run(SessionCommand::StopBoost, |engine| {
+            let warm = engine.pause_interceptor();
+            engine.stop_windivert();
+            engine.stop_capture();
+            engine.stop_redirect();
+            Ok(warm)
+        })
+    }
+
+    /// Stop every active boost backend and end the capture session completely.
     pub fn stop_boost(&mut self) -> Result<(), AppError> {
         self.run(SessionCommand::StopBoost, |engine| {
             engine.stop_interceptor();

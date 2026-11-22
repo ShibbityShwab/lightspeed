@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.5] - 2026-11-22
+
+### Changed
+
+- **WinDivert capture is now a long-lived session.** The GUI's Stop action
+  pauses interception by gating every flow direct and keeps the WinDivert
+  handles and filter open. The next Optimize with the same capture scope flips
+  the gate back on and reuses the session. Repeated Optimize/Stop therefore no
+  longer opens and closes the driver/filter at all, which is the churn that
+  produced `FWP_E_IN_USE`.
+- Only an app Quit, a game/profile or capture-scope change, or a backend
+  without a gate closes the handles. Relay changes remain a pure data-plane
+  update and still never reopen WinDivert.
+- Added `pause_interceptor`/resume-in-place plan handling, a mock-level
+  pause/resume regression test, and status semantics where a paused session is
+  not reported as active interception.
+
 ## [1.12.4] - 2026-11-22
 
 ### Fixed

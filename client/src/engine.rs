@@ -544,6 +544,13 @@ pub struct LightSpeedEngine {
     /// clear). This is what keeps a timed-out teardown from becoming the next
     /// `FWP_E_IN_USE`.
     interceptor_teardown_incomplete: bool,
+    /// Capture-scope key of the live session. A plan with the same key resumes
+    /// the existing WinDivert session instead of closing and reopening the
+    /// driver handles; a different game/profile/port scope still replaces it.
+    interceptor_session_key: Option<String>,
+    /// True while the handles are kept warm but tunnelling is gated direct.
+    /// Pause/resume exists so repeated Optimize/Stop cannot churn WinDivert.
+    interceptor_paused: bool,
     /// Effective path-MTU cap for the tunnel (`[tunnel] mtu` / `--mtu`),
     /// applied to every interceptor start. Defaults to the conservative clamp.
     path_mtu_cap: usize,
@@ -583,6 +590,8 @@ impl LightSpeedEngine {
             windivert_stat_slot: None,
             interceptor_handle: None,
             interceptor_teardown_incomplete: false,
+            interceptor_session_key: None,
+            interceptor_paused: false,
             path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             hold_watch: None,
             telemetry_flush: None,
@@ -1391,9 +1400,11 @@ impl LightSpeedEngine {
     /// A relay change has to restart the data plane only when there is one;
     /// at startup the interceptor is started later, against the selected relay.
     pub fn is_intercepting(&self) -> bool {
-        self.interceptor_handle
-            .as_ref()
-            .is_some_and(crate::interceptor::InterceptorHandle::is_active)
+        !self.interceptor_paused
+            && self
+                .interceptor_handle
+                .as_ref()
+                .is_some_and(crate::interceptor::InterceptorHandle::is_active)
     }
 
     /// Liveness counters for the GUI's no-reply watchdog.
@@ -1499,17 +1510,9 @@ impl LightSpeedEngine {
     /// adds the fallback route the CLI's `--server-addr` names. The shipped path
     /// above is exactly this request with the old derivation.
     pub fn start_interceptor_request(&mut self, request: InterceptorRequest) -> Result<(), String> {
-        // The shipped one-shot API stops any running interceptor before it
-        // validates the new request; keep that exact order. A teardown that
-        // could not be acknowledged fails closed instead of opening a second
-        // WinDivert filter beside the old one.
-        self.stop_supervised();
-        if self.interceptor_handle.is_some() && !self.stop_interceptor() {
-            return Err(
-                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
-                    .to_string(),
-            );
-        }
+        // Planning no longer tears down a live session: the plan path decides
+        // whether the new request is the same capture scope (resume in place)
+        // or a genuinely different one (replace the handles).
         let plan = self.plan_interceptor(request)?;
         self.start_interceptor_plan(plan)
     }
@@ -1682,8 +1685,48 @@ impl LightSpeedEngine {
         if let Err(reason) = &plan.facts.available {
             return Err(reason.clone());
         }
-        // The plan path is public and is called directly by the live modes. It
-        // must not assume the caller stopped the previous run first.
+        let scope_key = Self::interceptor_scope_key(&plan.facts, &plan.config);
+
+        // Re-optimize with the same capture scope is a resume, not a driver
+        // restart. The handles and tunnel task stay alive; only the relay/control
+        // plane and the direct/tunnel gate change. This is the path that keeps
+        // repeated Optimize/Stop from churning WinDivert.
+        if self.interceptor_handle.is_some() && !self.interceptor_teardown_incomplete {
+            let same_scope = self.interceptor_session_key.as_deref() == Some(scope_key.as_str());
+            let gated = same_scope
+                && self.interceptor_handle.as_ref().is_some_and(|handle| {
+                    handle.is_active() && handle.set_tunnelling_enabled(true)
+                });
+            if gated {
+                self.stop_supervised();
+                self.interceptor_paused = false;
+                self.spawn_registration(plan.relay);
+                self.note_telemetry_proxy(plan.relay);
+                self.set_telemetry_game(&plan.facts.game_key);
+                if let Ok(mut s) = self.status.write() {
+                    s.interceptor_active = true;
+                    s.interceptor_platform = plan.facts.platform;
+                    s.interceptor_server = Self::interceptor_initial_server(&plan.config);
+                    s.bypass_mode = plan.config.bypass.mode.as_str().to_string();
+                    s.interceptor_error = None;
+                    s.control_registered = false;
+                    s.session_token = None;
+                    s.registration_error = None;
+                }
+                if plan.announce_start {
+                    tracing::info!(
+                        "🚀 Interceptor resumed for {} via {} (proxy {})",
+                        Self::interceptor_target_label(&plan.config, &plan.facts.game_name),
+                        plan.facts.platform,
+                        plan.relay,
+                    );
+                }
+                return Ok(());
+            }
+        }
+
+        // Different capture scope (or no gate): replace the session. This is the
+        // only path that opens/closes WinDivert handles during a plan.
         if self.interceptor_handle.is_some() && !self.stop_interceptor() {
             return Err(
                 "previous interception did not shut down cleanly; restart LightSpeed before starting again"
@@ -1698,19 +1741,7 @@ impl LightSpeedEngine {
             announce_start,
         } = plan;
 
-        let initial_server = match config.process_target.as_ref() {
-            Some(target) => format!("Process {}", target.describe()),
-            None => config
-                .initial_routes
-                .first()
-                .map(|r| r.remote.to_string())
-                .unwrap_or_else(|| {
-                    format!(
-                        "Auto-detecting ({}-{})…",
-                        config.port_range.0, config.port_range.1
-                    )
-                }),
-        };
+        let initial_server = Self::interceptor_initial_server(&config);
         let platform = facts.platform;
         let bypass_mode = config.bypass.mode.as_str();
 
@@ -1768,6 +1799,8 @@ impl LightSpeedEngine {
         }
 
         self.interceptor_handle = Some(handle);
+        self.interceptor_session_key = Some(scope_key);
+        self.interceptor_paused = false;
         // A successful real start is the proof that the driver is usable; it is
         // the only latch-clearing event, avoiding a separate probe handle that
         // could itself interfere with WinDivert's WFP cleanup.
@@ -1862,6 +1895,70 @@ impl LightSpeedEngine {
         }
     }
 
+    fn interceptor_initial_server(config: &InterceptorConfig) -> String {
+        match config.process_target.as_ref() {
+            Some(target) => format!("Process {}", target.describe()),
+            None => config
+                .initial_routes
+                .first()
+                .map(|r| r.remote.to_string())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Auto-detecting ({}-{})…",
+                        config.port_range.0, config.port_range.1
+                    )
+                }),
+        }
+    }
+
+    /// Capture-scope identity for the live WinDivert session.
+    ///
+    /// The kernel filter is fixed when the handles open, so only a plan with
+    /// exactly this scope may reuse the session. Relay changes are deliberately
+    /// absent: they are data-plane state (`session::current_proxy`) and must not
+    /// cause a driver reopen.
+    fn interceptor_scope_key(facts: &InterceptorFacts, config: &InterceptorConfig) -> String {
+        format!(
+            "{}|{:?}|{:?}|{:?}|{}|{}",
+            facts.game_key,
+            config.port_range,
+            config.capture_tcp_ports,
+            config.transport,
+            config
+                .process_target
+                .as_ref()
+                .map(|target| target.describe())
+                .unwrap_or_default(),
+            config.process_names.join(","),
+        )
+    }
+
+    /// Pause interception without closing the capture handles.
+    ///
+    /// The WinDivert session stays alive and gates every flow direct; a later
+    /// plan with the same capture scope only flips the gate back. Backends with
+    /// no gate fall back to the old full stop. Returns whether any session is
+    /// still held warm.
+    pub fn pause_interceptor(&mut self) -> bool {
+        let Some(handle) = self.interceptor_handle.as_ref() else {
+            if let Ok(mut s) = self.status.write() {
+                s.interceptor_active = false;
+            }
+            return true;
+        };
+        if !handle.set_tunnelling_enabled(false) {
+            return self.stop_interceptor();
+        }
+        self.stop_supervised();
+        self.interceptor_paused = true;
+        if let Ok(mut s) = self.status.write() {
+            s.interceptor_active = false;
+            s.interceptor_error = None;
+        }
+        tracing::info!("Interception paused; WinDivert handles remain open");
+        true
+    }
+
     /// Stop the OOP interceptor (if running), waiting a bounded time for the
     /// platform owner threads to release their handles.
     ///
@@ -1870,6 +1967,8 @@ impl LightSpeedEngine {
     /// filter next to a filter that may still be registered.
     pub fn stop_interceptor(&mut self) -> bool {
         self.stop_supervised();
+        self.interceptor_session_key = None;
+        self.interceptor_paused = false;
         let had_handle = self.interceptor_handle.is_some();
         let mut stopped = true;
         if let Some(mut h) = self.interceptor_handle.take() {
@@ -1922,6 +2021,8 @@ impl LightSpeedEngine {
             }
             return false;
         }
+        self.interceptor_session_key = None;
+        self.interceptor_paused = false;
         let Some(mut handle) = self.interceptor_handle.take() else {
             if let Ok(mut s) = self.status.write() {
                 s.interceptor_active = false;
@@ -2041,7 +2142,7 @@ impl LightSpeedEngine {
             if let Some(srv) = ist.detected_server {
                 snap.interceptor_server = srv.to_string();
             }
-            snap.interceptor_active = handle.is_active();
+            snap.interceptor_active = handle.is_active() && !self.interceptor_paused;
         }
 
         snap
@@ -2206,7 +2307,8 @@ mod tests {
 
     use super::{
         apply_registration_result, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
-        InterceptorRequest, LightSpeedEngine, RedirectOptions, DEFAULT_CONTROL_PORT,
+        InterceptorFacts, InterceptorPlan, InterceptorRequest, LightSpeedEngine, RedirectOptions,
+        DEFAULT_CONTROL_PORT,
     };
     use crate::interceptor::{
         mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
@@ -2218,6 +2320,93 @@ mod tests {
             .build()
             .expect("tokio runtime for engine test");
         LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    /// A mock interceptor whose handle exposes the tuning gate, so the
+    /// pause/resume path can be tested without touching the OS driver.
+    struct GatedMock;
+
+    impl TrafficInterceptor for GatedMock {
+        fn platform_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn check_availability(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn start(
+            &self,
+            config: InterceptorConfig,
+        ) -> anyhow::Result<crate::interceptor::InterceptorHandle> {
+            let mut handle = MockInterceptor::new().start(config)?;
+            handle.attach_tunnelling_switch(std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(true),
+            ));
+            Ok(handle)
+        }
+    }
+
+    fn test_plan(interceptor: Box<dyn TrafficInterceptor>) -> InterceptorPlan {
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        InterceptorPlan {
+            interceptor,
+            config: InterceptorConfig {
+                game_name: "Test".to_string(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                capture_tcp_ports: None,
+                process_names: Vec::new(),
+                process_target: None,
+                port_range: (1000, 2000),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                initial_routes: Vec::new(),
+                proxy_addr: relay,
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: Default::default(),
+                bypass: Default::default(),
+            },
+            facts: InterceptorFacts {
+                game_key: "test".to_string(),
+                game_name: "Test".to_string(),
+                ports: (1000, 2000),
+                process_names: Vec::new(),
+                path_mtu_cap: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                platform: "mock",
+                routes: Vec::new(),
+                port_range: (1000, 2000),
+                server_override: None,
+                adaptive: AdaptivePolicy::default(),
+                available: Ok(()),
+            },
+            relay,
+            announce_start: false,
+        }
+    }
+
+    #[test]
+    fn pause_and_resume_keep_the_capture_session_warm() {
+        let mut engine = test_engine();
+        engine
+            .start_interceptor_plan(test_plan(Box::new(GatedMock)))
+            .expect("the mock starts");
+        assert!(engine.is_intercepting());
+        assert!(engine.pause_interceptor());
+        assert!(
+            !engine.is_intercepting(),
+            "paused traffic must not read as active interception"
+        );
+        assert!(
+            engine.interceptor_handle.is_some(),
+            "pause must keep the backend handle for a later resume"
+        );
+
+        engine
+            .start_interceptor_plan(test_plan(Box::new(GatedMock)))
+            .expect("the same capture scope resumes the warm session");
+        assert!(engine.is_intercepting());
+        engine.stop_interceptor();
     }
 
     #[test]
