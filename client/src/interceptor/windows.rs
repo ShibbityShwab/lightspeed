@@ -1051,35 +1051,6 @@ impl TrafficInterceptor for WinDivertInterceptor {
         Ok(())
     }
 
-    fn preflight(&self) -> Result<(), String> {
-        // Called only immediately before a start, never from status/capability
-        // queries. A sniff handle with a real filter exercises the per-handle
-        // callout/filter installation path (the one that returns FWP_E_IN_USE
-        // for a stale provider) without diverting any traffic. Port 9 is a
-        // discard port; this filter cannot match normal game traffic.
-        match OwnedHandle::open(
-            "udp and outbound and udp.DstPort == 9",
-            WinDivertLayer::Network,
-            0,
-            WinDivertFlags::new().set_sniff(),
-        ) {
-            Ok(handle) => {
-                if let Err(e) = handle.close() {
-                    tracing::warn!("WinDivert preflight close failed: {e}");
-                }
-                Ok(())
-            }
-            Err(e) if is_actionable_driver_failure(&e) => Err(driver_open_remedy(&e)),
-            Err(e) => {
-                tracing::warn!(
-                    "WinDivert preflight probe failed with an unclassified error: {e}; \
-                     leaving the start path to report it"
-                );
-                Ok(())
-            }
-        }
-    }
-
     fn start(&self, config: InterceptorConfig) -> anyhow::Result<InterceptorHandle> {
         use bytes::BytesMut;
         use lightspeed_protocol::{FecHeader, FEC_HEADER_SIZE, HEADER_SIZE};
@@ -1193,47 +1164,25 @@ impl TrafficInterceptor for WinDivertInterceptor {
             }
             Err(e) => {
                 log_open_failure("intercept", &e);
-                let hint = if is_fwp_in_use(&e) {
-                    " A previous LightSpeed/WinDivert filter is still registered; close any \
-                     stale LightSpeed process or restart Windows to clear it."
-                } else {
-                    ""
-                };
-                return Err(anyhow::anyhow!(
-                    "WinDivert open failed (need Admin + WinDivert64.sys loaded): {e}.{hint}"
-                ));
+                return Err(anyhow::anyhow!(driver_open_remedy(&e)));
             }
         };
 
-        // Open inject handle (send-only; no capture filter, no block/recv).
-        // `send_only` avoids registering a filter for a handle that only writes
-        // spoofed inbound replies, shrinking the WFP state surface per session.
+        // Open inject handle (write-only for injecting inbound spoofs).
         tracing::info!("⚡ Opening WinDivert inject handle...");
-        let wd_inject = match OwnedHandle::open(
-            "false",
-            WinDivertLayer::Network,
-            0,
-            WinDivertFlags::new().set_send_only(),
-        ) {
-            Ok(h) => {
-                tracing::info!("✅ WinDivert inject handle opened successfully");
-                Arc::new(h)
-            }
-            Err(e) => {
-                log_open_failure("inject", &e);
-                // Close the already-open intercept handle before returning.
-                let _ = wd_intercept.close();
-                let hint = if is_fwp_in_use(&e) {
-                    " A previous LightSpeed/WinDivert filter is still registered; close \
-                         any stale LightSpeed process or restart Windows to clear it."
-                } else {
-                    ""
-                };
-                return Err(anyhow::anyhow!(
-                    "WinDivert inject handle failed: {e}.{hint}"
-                ));
-            }
-        };
+        let wd_inject =
+            match OwnedHandle::open("false", WinDivertLayer::Network, 0, WinDivertFlags::new()) {
+                Ok(h) => {
+                    tracing::info!("✅ WinDivert inject handle opened successfully");
+                    Arc::new(h)
+                }
+                Err(e) => {
+                    log_open_failure("inject", &e);
+                    // Close the already-open intercept handle before returning.
+                    let _ = wd_intercept.close();
+                    return Err(anyhow::anyhow!(driver_open_remedy(&e)));
+                }
+            };
 
         // Open a shadow-direct inbound handle. It is a sniff handle (copy, never
         // divert), so it observes replies from a tracked game server to a
@@ -2316,10 +2265,16 @@ impl TrafficInterceptor for WinDivertInterceptor {
             let wd_inj = Arc::clone(&wd_inject);
             let wd_sh = wd_shadow.clone();
             move || {
-                let _ = wd_ic.close();
-                let _ = wd_inj.close();
+                if let Err(e) = wd_ic.close() {
+                    tracing::warn!("WinDivert intercept close failed: {e}");
+                }
+                if let Err(e) = wd_inj.close() {
+                    tracing::warn!("WinDivert inject close failed: {e}");
+                }
                 if let Some(sh) = &wd_sh {
-                    let _ = sh.close();
+                    if let Err(e) = sh.close() {
+                        tracing::warn!("WinDivert shadow close failed: {e}");
+                    }
                 }
             }
         };
