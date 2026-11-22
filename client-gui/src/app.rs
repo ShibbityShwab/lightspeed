@@ -1676,10 +1676,10 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// Stop every active boost backend and clear the start timestamp.
+    /// Pause boost backends; Quit uses the full-stop command instead.
     fn stop_boost(&mut self) {
-        if let Err(error) = self.commands.stop_boost() {
-            tracing::error!("stop command failed: {error:?}");
+        if let Err(error) = self.commands.pause_boost() {
+            tracing::error!("pause command failed: {error:?}");
         }
         self.boost_start = None;
         self.relayed_base = None;
