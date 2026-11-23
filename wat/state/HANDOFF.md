@@ -1,147 +1,135 @@
-# Handoff: LightSpeed, 2026-11-16
+# Handoff — WinDivert stability reset (2026-11-23)
 
-Brief for the incoming session. Start at `wat/state/current-phase.md` (live
-state), then `wat/rules.md` (the `$0` cost rule and the Windows shell rule bind
-hardest), then `wat/README.md` (the map).
+**Read this first. This file is the compact context for a new session; do not
+re-derive the incident from scratch.**
 
-Repo: `ShibbityShwab/lightspeed`, branch `master`.
+## Status
 
-## What this project is
+- Product: LightSpeed Windows GUI, installed **1.12.5**. Stability claim is
+  **withdrawn** pending the P0 gate below.
+- The owner stopped manual testing. Do not start/stop the app or touch
+  WinDivert/WFP unless a task explicitly requires a clean-boot real-driver run.
+- Expert audit, roadmap, personas and training are in **PR #225** (branch
+  `audit/windivert-stability`, worktree
+  `.agents/worktrees/windivert-stability-audit`). Merge first if the new
+  session starts from `master`.
+- No production code change is in flight. The last plausible cold-start
+  experiments were discarded; the released 1.12.5 artifact remains installed.
 
-A zero-cost global network optimizer for multiplayer games, run through a
-Workflows/Agents/Tools autonomy system (`wat/`) on **DeepSeek Harness**. Crates:
+## What was observed (facts)
 
-- `client/` — core engine: pcap/WinDivert capture, QUIC control plane, FEC
-  tunnel, latency probing, per-game process detection.
-- `client-gui/` — egui Windows tray app (the active product surface).
-- `proxy/` — the relay fleet binary.
-- `protocol/` — shared wire types.
-- `infra/` — Terraform, Docker, relay scripts, monitoring collectors.
-- `web/` — GitHub Pages site, locales generated from the English source.
-- `dist/`, `packaging/` — Scoop / Chocolatey / winget / MSI.
-- `.github/workflows/` — CI, Docker, security audit, deploy, health monitors.
+- 1.12.5 cold-started on a clean boot and four manual Stop→Optimize cycles
+  succeeded.
+- In a real 363 s session, after two intra-session server re-detects and four
+  no-reply windows, a **Stop** occurred at 06:49:38.417Z with pin `id=1` still
+  active. Diverting handles `id=2/3/4` closed `ok`.
+- Fourteen milliseconds after the next start invocation, intercept `id=5`
+  failed with `FWP_E_IN_USE` (`0x8032000A`); a second invocation `id=6` failed
+  too. The control plane registered successfully immediately after each failed
+  capture start, so route plane was alive while capture was dead.
+- The pin path suppresses retries (`should_retry` requires `!pin_active`), so
+  one transient became a hard failure with “restart Windows” advice.
+- The server re-detects themselves closed **zero** capture handles. The Stop
+  actor is not logged; a stale ERROR card / manual Stop / implicit pre-stop is
+  the working hypothesis, not a proven fact.
+- A stale “Registration failed / control-plane registration failed” card can
+  survive recovery: a superseded registration writes failure status, the
+  replacement’s success does not clear it, and `Error` outranks `Optimizing`.
+- The QA 84/84 matrix ran on `84e15c3`, not release HEAD `01438e0`; its cycles
+  were 11.8–12.2 s, used one blackholed server, had no return traffic, and
+  never exercised a server transition. It cannot validate 1.12.5.
 
-Cost rule (`wat/rules.md`): the **owner's** ongoing spend stays exactly `$0.00`;
-the eight community relays are sponsor-funded (decision 2026-09-13).
+## What is not proven
 
-## Agent setup (2026-11-16 migration)
+- The kernel call/object that returns `0x8032000A`; the leading hypotheses are a
+  long-session WFP callout unregister race, a leak, or an external holder.
+- The actor of the 06:49 Stop and why two start invocations followed.
+- Whether the released 1.12.5 reproduces the same failure; trace provenance is
+  mixed.
+- Whether the pin is worth keeping long-term. Short-term it is a handle, not a
+  guarantee.
 
-- Harness is DeepSeek Harness only. opencode/OmO artefacts are gone; do not
-  reintroduce harness-specific state directories.
-- Procedures are **project skills** in `.dsh/skills/`: `lightspeed-wat`,
-  `lightspeed-team`, `lightspeed-windows`, `lightspeed-verify`. They are
-  discovered automatically; load one instead of re-deriving a procedure.
-- Personas are **delegation contracts** in `wat/personas/` (eight of them). Team
-  work uses Agent Teams; the contract is `wat/team-mode.md`.
-- State is split: `current-phase.md` is the small hot file; history lives in
-  `phases/<YYYY-MM>.md`; decisions live in `decisions/<YYYY-MM>.md`.
-- The old `wat/archive/agents.md` was deleted because on Windows it matched the
-  `AGENTS.md` instruction loader and was injected into every session. Never name
-  a descriptive document `agents.md`.
+## P0 — the only patch to start now
 
-## Windows host facts (hard-won, do not re-learn)
+All six land before any stability/release claim.
 
-1. **Shell is Windows PowerShell 5.1.** `pwsh` is not installed. No Git Bash, no
-   WSL, no `bash script.sh`. `git` runs directly.
-2. **CPython 3.12 is installed** at `%LOCALAPPDATA%\Programs\Python\Python312`
-   (per-user, PATH updated). A shell started before 2026-11-16 does not see it;
-   restart the shell or pass `-Python` the full path. The Microsoft Store
-   aliases `python`/`python3` are still stubs (exit 9009).
-3. **Rust is installed** (1.100.0, matching `rust-toolchain.toml`); `cargo fmt`,
-   clippy and tests run locally, and the localization gates now run too
-   (`scripts/Localization.ps1 -Check` passed: 403 catalog keys, 8 locale pages,
-   48 localized docs).
-4. **Elevation does not propagate into the agent shell.** A medium-integrity
-   shell cannot stop an elevated GUI, and a running GUI locks its own exe. Use
-   `scripts/dev-gui.ps1 -Elevate`, stop from the tray, verify installs by size
-   (`scripts/install-gui.ps1`).
-5. **Single-instance mutex is shared across builds.** A stray `target/debug`
-   instance silently wins. Check `Get-Process lightspeed-gui` first.
-6. **egui popups are invisible to accessibility tooling.** Verify collapsed
-   controls by selected text and a screenshot.
-7. **PS 5.1 gotchas:** a single `PSCustomObject` has no reliable `.Count` — wrap
-   in `@()`; `Select-Object -First N` terminates a long pipeline early; no `??`,
-   no ternary, no `ProcessStartInfo.ArgumentList`.
-8. **Line endings.** `.gitattributes` pins LF for text and CRLF for `.cmd`/`.bat`.
-   Existing worktrees may still be CRLF until re-checkout; single-line edit
-   anchors and the DSH edit tool work either way.
+| ID | Work | Owner | Write scope |
+|---|---|---|---|
+| P0-1 | Lifecycle instrumentation v1: build SHA; interceptor state/reason/actor; open/close ids + close-age + pin/FWP; registration ledger; presence; UI error/word; `lifecycle.jsonl`; rate-limited support bundle | `windows-engineer` + `rust-engineer` | `client/src/interceptor/`, `client/src/engine.rs`, `client/src/app/`, `client-gui/src/app.rs` |
+| P0-2 | Restart resilience: bounded retry while pinned; one pin-cycle; typed `FAULT_LATCHED`; close-age context; honest recovery copy; no immediate reboot advice | `windows-engineer` | interceptor + error copy |
+| P0-3 | Registration/error state machine: generation guard, ledger, source+epoch clear on recovery, no masking live capture, command-error clear | `rust-engineer` | engine/app/GUI DTO |
+| P0-4 | Start/Stop semantics: no implicit pre-stop; explicit restart; action+source logging; hold installed before first tunnelled packet | `rust-engineer` | engine/GUI |
+| P0-5 | Truth pass: remove pin/driver-unload guarantees and false callout claims from docs/UI; do not rewrite tags | `release-scribe` | docs, CHANGELOG |
+| P0-6 | Evidence gate: exact artifact hash; A2 two-endpoint traffic; A4/A5 fast restart; A6 long session; A11 dirty-kernel recovery; two independent runs | `stability-verifier` | tests/evidence only |
 
-## Verified state at this handoff (2026-11-16, after the WF-067 rollout)
+**Suggested first action:** P0-1 only, as a behavior-neutral instrumentation PR.
+Do not combine it with recovery/state-machine edits. Then P0-2/P0-3 together
+against the same trace, P0-4, P0-5, P0-6.
 
-- **1.11.0 is released and live.** `v1.11.0` is the latest GitHub release
-  (2026-11-16, 39 cargo-dist assets, body = `CHANGELOG.md`). All eight community
-  relays run 1.11.0 with `[network] control_alpn = "required"` and are healthy;
-  a 1.11.0 client negotiates `lightspeed-control/1`, a pre-1.11.0 client is
-  rejected with alert 120 (owner-accepted traffic impact).
-- **The release was published manually.** The Release workflow failed at
-  "Create GitHub Release" with `HTTP 403: Resource not accessible by
-  integration`; artifacts came from its own green build jobs and packaging
-  manifests were bumped by hand. Board task-9 fixes the pipeline.
-- **The §7.4 clean window was measured and failed before the flip** (M1 66 -> 520
-  in 120 s on the canary, zero accepted handshakes); the fleet flip proceeded on
-  the owner's explicit traffic-impact authorization and the deviation is recorded
-  in the plan header, the state entry and the decision log.
-- Lead gate on the code (unchanged since `2de1665`): fmt/clippy clean (only the
-  two pre-existing manifest warnings); workspace **1,557/0/6**; GUI **181/0/1**;
-  WinDivert **1,261/0/4**; CI `QUIC Integration Tests` command **1,493/0/2**;
-  client quic lib **640/0/1**; proxy quic lib **159/0/0**; localization checks
-  green. CI run `43880379231` on `2de1665` is green on every job.
-- Agent layer: durable-owner policy is in `wat/team-mode.md` Step 2. Team
-  instances are **session-scoped**: a new session starts with the same policy but
-  fresh instances (and a fresh, empty board).
+## Hard acceptance gate
 
-## Current workstream: 1.11.0 is live; watch the drain, fix the release pipeline
+A release may not be called stable until, on the exact candidate artifact:
 
-Read `docs/quic-alpn-rollout.md` (its header now records the rollout, the measured
-§7.4 fail and the owner authorization) and the newest entry in
-`wat/state/current-phase.md`. The control plane negotiates
-`lightspeed-control/1` end to end; the fleet is `required`; the flip tool is
-`infra/scripts/relay-control-alpn.sh` with a `Deploy Proxy` dispatch path and a
-hermetic self-test in `Infra Script Tests`.
+- Two independent clean-boot runs.
+- ≥10 minute traffic-bearing session with a working return path.
+- Settlement/POI and region transitions with **no capture teardown**.
+- 20 rapid Stop→Optimize cycles; zero `FWP_E_IN_USE`, zero stale cards.
+- Registration race: superseded generation must not produce a failure card;
+  newer success clears it.
+- Quit/relaunch and dirty-kernel recovery are explicit rows; a reboot is never
+  used to turn a row green.
+- Every row records build hash, timestamps, handle ids, pin state, WFP counts.
 
-**What is left is monitoring and pipeline repair, not rollout code:**
-1. Watch `lightspeed_control_handshakes_total{outcome="rejected_no_application_protocol"}`
-   per relay; it is the meter of pre-1.11.0 clients. The real §7.4-style clean
-   window is now "M1 stops increasing over a window with >=200 accepted
-   handshakes" (board task-10).
-2. Fix the Release workflow publish path (403 on `POST /releases` from
-   `GITHUB_TOKEN`, plus the skipped choco/winget publish) before the next tag -
-   board task-9. Until then a tag needs the manual publish procedure recorded in
-   the 2026-11-16 decision entry.
-3. Owner decision: the public #140/#147 replies describing the client-first order.
-4. Later: the §5 retirement decision (client stops falling back / relay drops
-   `/1`) once M1 is flat.
+Any of these not measured = not a pass.
 
-Per-relay rollback stays one command (`--mode off` + restart, no client change).
-The POSIX relay smoke script also cannot run on this Windows host - CI verifies
-it. Team boards are **session-scoped**: recreate tasks from the plan rather than
-expecting the previous ids.
+## P1 — after P0 green
 
-**Do not ask for a Discord webhook.** The owner does not use Discord; monitor
-alerts surface as scheduled-workflow failures/logs (decided 2026-11-16).
+- In-place relay switching from the GUI (core `switch_relay` exists; no GUI
+  caller today — this is the primary transition path).
+- Auth/menu → region-specific match handled as a normal transition, not a game
+  exit.
+- Presence debounce; scan failure ≠ absent.
+- Opt-in bounded starvation failover (default off).
 
-## What still needs to happen (ranked)
+## P2 — later
 
-1. **Post-rollout**: watch M1 drain (task-10); fix the Release workflow publish
-   path (task-9); owner decision on the public #140/#147 replies.
-2. **Owner decisions**: the public #140/#147 replies, and later the §5 retirement
-   of the empty-offer fallback.
-3. **Small cleanups**: translation debt 7x8, `docs/architecture.md` selector
-   one-liner, `pooled_estimate` test-only, and the recorded ICMP-blocked-server
-   watchdog behaviour if it recurs.
-4. **v2 relay-vantage probe**: NO-GO until its fixed gates G1-G5 are measured
-   with fleet access (`docs/relay-server-leg-probe.md`).
-5. **Keep the state protocol** - one dated entry per round, decisions in
-   `decisions/<YYYY-MM>.md`, history moved to `phases/` rather than deleted, and
-   the durable-owner team policy in `wat/team-mode.md` Step 2.
+- UI action audit log + diagnostics surface.
+- Continuous long-session stability suite.
+- No direct WFP/NDIS/patched-driver work: EV cert + attestation + GPLv2
+  obligations break the $0 rule. Stay on official WinDivert 2.2.2.
 
-## Pain points
+## Non-negotiable rules
 
-- **Verify artefacts, not proxies.** Exit codes and summaries lied here before:
-  an install "succeeded" while file sizes differed; a suite read "ok, 0 passed".
-  Read pass counts, compare bytes, screenshot the UI, mutation-test fixes.
-- **Remote-write policy.** Routine commits/pushes to master are authorized
-  (standing grant), Conventional Commits, each push gated by the checks above.
-  Do not commit or push without the gate passing.
-- **Owner gates** are the only things that should block; everything else is a
-  task, not a question.
+- Owner spend stays **$0.00**; Windows-native PowerShell 5.1; no bash/WSL.
+- No release/publish without the owner gate.
+- Do not run WinDivert tests on a dirty kernel and call it a pass.
+- Do not claim a fix from a build that differs from the release artifact.
+- A control-plane success does not mean the capture plane works, and vice
+  versa; keep the two planes separate.
+- Never restart capture for a server/region change, relay choice/demotion,
+  starvation warning, registration reconnect, one failed presence scan, or a
+  stale UI card.
+
+## Owner decisions
+
+1. Add an explicit **Reset interception driver** action (service stop, warning
+   if another WinDivert client exists)?
+2. Keep the pin short-term, stripped of any guarantee, until P0-6 data decides?
+3. Leave automatic starvation failover off by default?
+
+## Bootstrap prompt for the new session
+
+> Read `wat/state/HANDOFF.md`. We are starting the WinDivert stability reset
+> from P0-1 only. Create the P0 task board with the task graph in this handoff,
+> assign disjoint write scopes, and implement behavior-neutral lifecycle
+> instrumentation first. Do not modify release claims, do not publish, and do
+> not run real-driver tests on a dirty kernel. Verify the exact artifact and
+> report findings; no stability claim until the P0 gate passes.
+
+## References
+
+- Audit PR: #225 (`docs/audit/`, `docs/training/`, `docs/design/windivert-stability-roadmap-2026-11-23.md`, three new `wat/personas/`).
+- Full expert audits: `docs/audit/{windivert-lifecycle,game-transition-state-machine,stability-verification}-2026-11-23.md`.
+- Curriculum: `docs/training/in-house-stability-curriculum.md`.
+- User trace: `wat/evidence/2026-11-23/stability-audit/user-server-transition-trace.log`.
+- Existing release/audit worktree: `.agents/worktrees/pinned-driver-1.12.5`.
