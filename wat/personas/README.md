@@ -4,7 +4,7 @@
 > Canonical copy: this directory. `wat/personas/personas.json` is the
 > machine-readable roster (with `personas.schema.json`) so tooling and checks can
 > read it without parsing prose.
-> Last updated: 2026-11-19
+> Last updated: 2026-11-23
 
 ## What a persona is (and is not)
 
@@ -32,6 +32,9 @@ says who *should*, and the write scope on the shared task says who *is*.
 | `ux-lead` | UXLead | UX research, information architecture, flows, usability, microcopy (`docs/design/gui-ux-*.md`) | `interface-designer`, `qa-engineer` |
 | `design-system` | DesignSystem | design tokens, type, colour, motion, component contracts, a11y floors (`docs/design/design-system-*.md`, `client-gui/src/design.rs`) | `interface-designer`, `desktop-platform` |
 | `desktop-platform` | DesktopPlatform | cross-platform native conventions and parity (`docs/design/cross-platform-*.md`, `client-gui/src/platform/`) | `interface-designer`, `dev-ops` |
+| `windivert-expert` | WinDivertExpert | WinDivert/WFP lifecycle correctness, pin/retry/recovery policy, lifecycle evidence (`client/src/interceptor/`, `client/windivert/`) | `rust-dev`, `stability-verifier` |
+| `game-networking-expert` | GameNetworkingExpert | presence/destination/route/presentation state machine, transitions, registration generations, in-place relay switching (`docs/design/`, `client/src/route/`, `client/src/quic/`) | `rust-dev`, `interface-designer`, `stability-verifier` |
+| `stability-verifier` | StabilityVerifier | independent verification of lifecycle claims, acceptance matrix, evidence audits (`wat/evidence/`, `docs/audit/`) | `qa-engineer`, `windivert-expert`, `game-networking-expert` |
 
 Slugs are the subagent `name` and the task `owner`. They are lowercase with
 hyphens because that is what `subagent` accepts. A second instance of the same
@@ -72,6 +75,13 @@ prompt without reading the whole file:
 - **Owns** — paths this persona is expected to change; the default write scope.
 - **Must do** — non-negotiable working rules for this role.
 - **Must not** — the failure modes this role has historically produced.
+- **Required evidence** — the artifacts a claim from this role must carry
+  (expert personas: `windivert-expert`, `game-networking-expert`,
+  `stability-verifier`).
+- **Review checklist** — what an independent reviewer ticks before accepting
+  this role's work (expert personas).
+- **When to escalate** — the decisions this role must not make alone (expert
+  personas).
 - **Definition of done** — what must be true before the task is completed.
 - **Delegation brief** — the block the Lead pastes after the envelope.
 - **Task template** — a ready `team_task_create` payload.

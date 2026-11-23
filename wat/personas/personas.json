@@ -1,7 +1,7 @@
 {
   "$schema": "./personas.schema.json",
   "version": 1,
-  "updated": "2026-11-19",
+  "updated": "2026-11-23",
   "lead": {
     "slug": "lead",
     "display": "Lead",
@@ -96,6 +96,30 @@
       "owns": ["docs/design/cross-platform-2026.md", "client-gui/src/platform/"],
       "when_to_use": "Cross-platform native conventions, tray/menu, window chrome, shortcuts, DPI, autostart, updater UX, admin/elevation semantics, or a parity claim that needs evidence.",
       "pairs_with": ["interface-designer", "dev-ops"]
+    },
+    {
+      "slug": "windivert-expert",
+      "display": "WinDivertExpert",
+      "file": "windivert-expert.md",
+      "owns": ["client/src/interceptor/", "client/windivert/", "wat/evidence/"],
+      "when_to_use": "A WinDivert/WFP lifecycle question, pin/retry/recovery policy change, FWP_E_IN_USE triage, dirty-kernel recovery, or a lifecycle claim that needs captured WFP evidence.",
+      "pairs_with": ["rust-dev", "stability-verifier"]
+    },
+    {
+      "slug": "game-networking-expert",
+      "display": "GameNetworkingExpert",
+      "file": "game-networking-expert.md",
+      "owns": ["docs/design/", "client/src/route/", "client/src/app/watchdog.rs", "client/src/quic/"],
+      "when_to_use": "Game-server/region transitions, presence semantics, registration generations, in-place relay switching, reconnection/failover policy, or presentation-state design across the five planes.",
+      "pairs_with": ["rust-dev", "interface-designer", "stability-verifier"]
+    },
+    {
+      "slug": "stability-verifier",
+      "display": "StabilityVerifier",
+      "file": "stability-verifier.md",
+      "owns": ["wat/evidence/", "docs/audit/"],
+      "when_to_use": "Independent verification of a lifecycle/transition claim, auditing a matrix or evidence bundle, defining acceptance rows, or deciding whether a release claim is supported.",
+      "pairs_with": ["qa-engineer", "windivert-expert", "game-networking-expert"]
     }
   ],
   "task_conventions": {
