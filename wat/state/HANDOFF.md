@@ -90,6 +90,13 @@ re-derive the incident from scratch.**
   **1,724 / 0 / 9**, localization 4/4. Evidence
   `wat/evidence/2026-11-23/upstream-merge-trial/`. The real worktree was not
   merged (still 39 uncommitted entries on `9e8029b`).
+- **Merge + PR (2026-11-23).** The P0 work is committed (4 commits) on
+  `feat/windivert-stability-p0`, merged with `origin/master` `f2e7bb0` (PR #226
+  a11y) and opened as **PR #228**; the merged tree's clean-build gate is green
+  (workspace **2,067 / 0 / 7**, GUI **254 / 0 / 1**, WinDivert
+  **1,724 / 0 / 9**, localization 4/4). Conflict resolutions: lifecycle init
+  stays in the real `new` (never `build`); merged GUI budgets `app.rs` 5566,
+  `presence.rs` 758, `route_surface.rs` 2570; both WAT sides kept.
 - **Next:** **P0-6 real rows need an owner-arranged clean boot (OD-6)**. Until
   they pass, no row is green, **no stability claim**, and 1.12.5 remains a
   candidate. Before landing, commit the P0 WIP, merge/rebase `f2e7bb0`,
