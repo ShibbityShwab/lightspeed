@@ -256,3 +256,7 @@ connect = "Verbinden"
 disconnect = "Trennen"
 quit = "Beenden"
 starved = "Relais liefert keinen Spielverkehr zurück"
+
+[a11y]
+route_map = "Weltkarte der Relais-Flotte; aktives Relais: {relay}. Standorte sind Schätzungen, keine Messungen."
+remove_relay = "Relais entfernen"

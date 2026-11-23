@@ -129,8 +129,11 @@ quoting anything below; these are the traps already measured in this repo.
   never be pushed off-screen.
 - `egui::Modal` sizes to content and does not scroll: clamp the sheet and wrap
   its body in a `ScrollArea`.
-- Popups/windows are invisible to accessibility tooling: a screenshot is the
-  only proof of a collapsed control.
+- In-window `egui::Modal` sheets are exposed to UI Automation (verified
+  2026-11-23: a UIA `InvokePattern` opened Settings and its Dialog, title and
+  controls appeared in the live tree). Inline combo popups are exposed in the tree (live-verified 2026-11-23 as
+  option buttons, but with no stable ids); context menus are untested. Still use
+  a screenshot for layout and the closed combo's selected text.
 - There is no reduced-motion signal in egui; poll the OS or do not claim the
   feature. Motion is limited to the globe while boosting and focused; no
   entrance animation, no hover motion on non-controls.
@@ -218,8 +221,9 @@ exactly that default; treat it as a negative reference, not a brief
   (see `lightspeed-windows`).
 - Capture the real window: the shipped widths (320 px is real today; wider only
   in a resizable build) × states (disconnected/idle, connected, boosting, game
-  pick/empty, error/fallback when reachable). The UIA tree cannot see egui
-  popups — read the screenshot.
+  pick/empty, error/fallback when reachable). The UIA tree sees in-window
+  Modal sheets (proved 2026-11-23) but not necessarily inline popups — read the
+  screenshot for a collapsed control.
 - Save to `wat/evidence/<YYYY-MM-DD>/` and name the paths in the report.
 - Gate: `cargo fmt --all --check`;
   `cargo clippy --workspace --all-targets --all-features --exclude lightspeed-gui`;

@@ -128,6 +128,24 @@ impl GamePresence {
         Self::spawn_with(GAME_PRESENCE_INTERVAL, try_auto_detect_game)
     }
 
+    /// A watcher with no worker: it never reports a game and never spawns a
+    /// process. Used by the offline renderer (`--a11y-dump` and the
+    /// accessibility tests), where a real scan would be a side effect.
+    pub(super) fn idle() -> Self {
+        let (updates_tx, updates) = mpsc::channel();
+        // Dropped immediately: `latest()` then reports "no new result", which is
+        // exactly a worker that has not finished a scan.
+        drop(updates_tx);
+        let (control, control_rx) = mpsc::channel();
+        drop(control_rx);
+        Self {
+            updates,
+            control,
+            handle: None,
+            enabled: false,
+        }
+    }
+
     /// Start a watcher around `detect`, on a fixed `interval`.
     ///
     /// Parameterised so the unit tests can drive the loop with a short interval

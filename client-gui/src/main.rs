@@ -51,10 +51,53 @@ fn main() {
     // the console-less Windows build. `run` returns errors instead of
     // panicking, and those are persisted here too.
     crash::install_panic_hook();
+    // `--a11y-dump <path>` is a windowless, offline render of the accessibility
+    // tree for CI and agent drivers. It runs before the single-instance guard
+    // and the tray so it can never disturb a running player.
+    if let Some(path) = a11y_dump_path() {
+        match app::run_a11y_dump(&path) {
+            Ok(_) => return,
+            Err(e) => {
+                crash::record_fatal(&format!("a11y dump failed: {e:#}"));
+                std::process::exit(1);
+            }
+        }
+    }
     if let Err(e) = run() {
         crash::record_fatal(&format!("{e:#}"));
         std::process::exit(1);
     }
+}
+
+/// Parse `--a11y-dump <path>` (or `--a11y-dump=<path>`).
+///
+/// A missing path writes `lightspeed-a11y-dump.json` in the temp directory
+/// rather than failing: an agent driving the binary should get a dump and a
+/// printable location, not an argument lecture.
+fn a11y_dump_path() -> Option<std::path::PathBuf> {
+    a11y_dump_path_from(std::env::args_os().skip(1))
+}
+
+/// The argv contract behind [`a11y_dump_path`], split out so it is testable
+/// without spawning a process.
+fn a11y_dump_path_from(
+    args: impl Iterator<Item = std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy();
+        if arg == "--a11y-dump" {
+            return Some(
+                args.next()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::temp_dir().join("lightspeed-a11y-dump.json")),
+            );
+        }
+        if let Some(path) = arg.strip_prefix("--a11y-dump=") {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+    None
 }
 
 fn run() -> anyhow::Result<()> {
@@ -428,5 +471,48 @@ mod app_title_tests {
             Some(APP_TITLE),
             "the window builder must use the same constant the smoke hook logs"
         );
+    }
+}
+
+#[cfg(test)]
+mod a11y_dump_tests {
+    use super::a11y_dump_path_from;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn args(items: &[&str]) -> impl Iterator<Item = OsString> {
+        items
+            .iter()
+            .map(|item| OsString::from(*item))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn a_dump_argument_accepts_a_separate_path() {
+        assert_eq!(
+            a11y_dump_path_from(args(&["--a11y-dump", "out.json"])),
+            Some(PathBuf::from("out.json"))
+        );
+    }
+
+    #[test]
+    fn a_dump_argument_accepts_the_equals_form() {
+        assert_eq!(
+            a11y_dump_path_from(args(&["--a11y-dump=C:\\tmp\\out.json"])),
+            Some(PathBuf::from("C:\\tmp\\out.json"))
+        );
+    }
+
+    #[test]
+    fn a_dump_without_a_path_uses_the_temp_directory() {
+        let path = a11y_dump_path_from(args(&["--a11y-dump"])).expect("a default path");
+        assert!(path.ends_with("lightspeed-a11y-dump.json"));
+    }
+
+    #[test]
+    fn unrelated_arguments_do_not_start_a_dump() {
+        assert_eq!(a11y_dump_path_from(args(&["--force"])), None);
+        assert_eq!(a11y_dump_path_from(args(&[])), None);
     }
 }

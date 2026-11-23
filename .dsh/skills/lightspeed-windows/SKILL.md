@@ -73,8 +73,10 @@ it builds.
   process"), and a running GUI locks its own exe (`Access is denied (os error 5)`
   on rebuild). Use `scripts/dev-gui.ps1 -Elevate`, stop from the tray, and verify
   installs by file size, not exit code (`scripts/install-gui.ps1` already does).
-- egui popups are invisible to accessibility tooling. Verify a collapsed control
-  by its selected text and a screenshot, not by the AX tree.
+- egui in-window Modal sheets ARE exposed to UI Automation (verified 2026-11-23
+  with `scripts/uia-tree.ps1` + `Invoke`); inline combo popups are exposed (live-verified 2026-11-23; option buttons
+  without stable ids), context menus are untested. Verify a collapsed control's
+  layout by its selected text and a screenshot.
 - Launch a GUI build with `Start-Process` and keep the handle; do not leave
   console windows behind.
 

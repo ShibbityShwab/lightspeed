@@ -28,8 +28,9 @@ health it cannot observe. Fix the state contract first, then the layout.
 - Show counters in both directions, and never report health that cannot be
   observed.
 - Verify by screenshot in a real window: narrow (~320 px) and wide, boosting and
-  idle, connected and disconnected. The accessibility tree cannot see egui
-  popups, so a screenshot is the only proof of a collapsed control.
+  idle, connected and disconnected. In-window Modal sheets and inline combo popups are exposed to the accessibility
+  tree (verified 2026-11-23); context menus are untested, so a screenshot is
+  still the proof of a collapsed control's layout.
 - Keep the minimum window width working; the status banner outranks decoration.
 
 ## Must not
@@ -64,8 +65,9 @@ Method:
 3. Every metric is named and says which leg it measures. Counters show both
    directions. No health claim the client cannot observe.
 4. Verify in a real window: screenshots at narrow and wide width, connected and
-   disconnected, boosting and idle. egui popups are invisible to accessibility
-   tooling, so a screenshot is the proof.
+   disconnected, boosting and idle. In-window Modal sheets and inline combo popups are visible to accessibility
+   tooling (verified 2026-11-23); context menus are untested, so keep a
+   screenshot as the proof for a collapsed control's layout.
 
 Report: states touched, the fact that drives each, the screenshot paths under
 wat/evidence/<YYYY-MM-DD>/, and any metric left unlabelled. Do not change engine

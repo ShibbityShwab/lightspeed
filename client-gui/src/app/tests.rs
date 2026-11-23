@@ -3209,3 +3209,811 @@ fn the_components_driver_row_fits_inline() {
         "the inline branch must not collide (label {label_w:.1}, value {value_w:.1})"
     );
 }
+
+// ── Accessibility regression suite ─────────────────────────────────────────
+//
+// These tests drive the *real* window shell through `a11y_dump::render_screen`
+// and the offline app constructor, then assert the AccessKit tree that a screen
+// reader (Narrator) or a UIA driver consumes. They are the regression net for
+// the labelling contract: every input-role node is named, every automation id
+// is stable and unique, state changes are live regions, sheets are dialogs, and
+// the dump is deterministic and free of real user data.
+//
+// Every test holds `i18n::test_lock()`: booting the offline app pins the
+// process-global language, and the names asserted below are localized copy.
+
+use super::a11y::{automation, AxNode, AxTree};
+use super::a11y_dump::{
+    dump_value, render_screen, reset_sample, seed_connected_sample, seed_error_sample,
+    seed_starved_sample,
+};
+use super::{LightSpeedApp, QuitFlag, UpdateCheckState, WindowGeometry};
+use crate::platform::CurrentPlatform;
+use eframe::egui::accesskit::{Live, Role};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+
+/// An offline app plus the context and runtime it renders through.
+///
+/// This mirrors `a11y_dump::dump_value`'s construction with the pieces exposed
+/// so tests can seed state and capture a typed [`AxTree`] instead of JSON.
+struct A11yApp {
+    app: LightSpeedApp<CurrentPlatform>,
+    ctx: eframe::egui::Context,
+    /// Keeps the engine's runtime handle valid for the app's lifetime; fields
+    /// drop in declaration order, so the app goes first.
+    #[allow(dead_code)]
+    runtime: tokio::runtime::Runtime,
+}
+
+impl A11yApp {
+    fn offline() -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a tokio runtime for the offline app");
+        let engine = Arc::new(Mutex::new(super::LightSpeedEngine::new(
+            runtime.handle().clone(),
+        )));
+        let quit: QuitFlag = Arc::new(AtomicBool::new(false));
+        let app = LightSpeedApp::<CurrentPlatform>::new_offline(engine, quit);
+        let ctx = eframe::egui::Context::default();
+        ctx.enable_accesskit();
+        Self { app, ctx, runtime }
+    }
+
+    fn render(&mut self) -> AxTree {
+        render_screen(
+            &self.ctx,
+            &mut self.app,
+            WindowGeometry {
+                monitor_height: Some(1080.0),
+                window_top: Some(0.0),
+            },
+        )
+    }
+}
+
+/// The three main-shell screens: idle, connected/optimizing, and starved.
+fn main_screens() -> Vec<(&'static str, AxTree)> {
+    let mut app = A11yApp::offline();
+    let idle = app.render();
+    seed_connected_sample(&mut app.app);
+    let connected = app.render();
+    seed_starved_sample(&mut app.app);
+    let starved = app.render();
+    vec![
+        ("main", idle),
+        ("main_connected", connected),
+        ("main_starved", starved),
+    ]
+}
+
+/// All seven screens `dump_value()` renders, seeded exactly like the dump.
+fn all_screens() -> Vec<(&'static str, AxTree)> {
+    let mut app = A11yApp::offline();
+    let mut screens = Vec::new();
+    screens.push(("main", app.render()));
+    seed_connected_sample(&mut app.app);
+    screens.push(("main_connected", app.render()));
+    seed_starved_sample(&mut app.app);
+    screens.push(("main_starved", app.render()));
+    reset_sample(&mut app.app);
+
+    app.app.show_settings = true;
+    screens.push(("settings", app.render()));
+    app.app.show_settings = false;
+
+    app.app.game_editor = GameEditorDraft::new_profile();
+    app.app.process_list = ProcessListState::Done;
+    app.app.show_game_editor = true;
+    screens.push(("game_editor", app.render()));
+    app.app.show_game_editor = false;
+
+    app.app.process_list = ProcessListState::Done;
+    app.app.process_rows = vec![ProcessEntry {
+        pid: 1234,
+        name: "sample-game.exe".to_string(),
+        path: Some("C:\\Games\\sample-game\\sample-game.exe".to_string()),
+        started_at: None,
+    }];
+    app.app.show_target_picker = true;
+    screens.push(("target_picker", app.render()));
+    app.app.show_target_picker = false;
+
+    app.app.show_update_dialog = true;
+    app.app.update_check = UpdateCheckState::Checking;
+    screens.push(("update", app.render()));
+    app.app.show_update_dialog = false;
+    app.app.update_check = UpdateCheckState::Idle;
+    screens
+}
+
+fn screen<'a>(screens: &'a [(&'static str, AxTree)], name: &str) -> &'a AxTree {
+    let found = screens
+        .iter()
+        .find(|(screen, _)| *screen == name)
+        .unwrap_or_else(|| panic!("the a11y dump has no {name} screen"));
+    &found.1
+}
+
+fn find<'a>(tree: &'a AxTree, id: &str) -> &'a AxNode {
+    tree.by_automation_id(id)
+        .unwrap_or_else(|| panic!("no accessibility node with automation id {id}"))
+}
+
+fn count(tree: &AxTree, id: &str) -> usize {
+    tree.nodes
+        .iter()
+        .filter(|node| node.automation_id.as_deref() == Some(id))
+        .count()
+}
+
+/// Every screen: no input-role node without a name, no repeated automation id.
+///
+/// The input invariant is the one a screen reader breaks first (`egui` reports
+/// a bare ComboBox, a painted control reports nothing); the id invariant is the
+/// one agent drivers break first.
+#[test]
+fn every_screen_names_its_inputs_and_never_repeats_an_automation_id() {
+    let _guard = crate::i18n::test_lock();
+    let screens = all_screens();
+    assert_eq!(
+        screens.len(),
+        7,
+        "the accessibility suite must cover every screen"
+    );
+    for (name, tree) in &screens {
+        let unnamed: Vec<String> = tree
+            .unnamed_inputs()
+            .iter()
+            .map(|node| {
+                format!(
+                    "{:?} id={:?} value={:?}",
+                    node.role, node.automation_id, node.value
+                )
+            })
+            .collect();
+        assert!(
+            unnamed.is_empty(),
+            "{name}: input-role nodes without an accessible name: {unnamed:?}"
+        );
+        tree.assert_every_input_is_named();
+        assert!(
+            tree.inputs().len() >= 4,
+            "{name} rendered only {} input nodes; the tree is not exercising the shell",
+            tree.inputs().len()
+        );
+        assert!(
+            tree.duplicate_automation_ids().is_empty(),
+            "{name}: duplicate automation ids: {:?}",
+            tree.duplicate_automation_ids()
+        );
+    }
+}
+
+/// The one CTA is a named Button whose name follows the route state, and it
+/// exposes the Click action whether or not the current gate lets it act.
+#[test]
+fn the_primary_action_is_a_named_button_that_follows_the_state() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    let idle = find(screen(&screens, "main"), automation::ACTION_PRIMARY);
+    let optimize = crate::i18n::t("action.optimize_route").to_uppercase();
+    assert_eq!(idle.role, Role::Button);
+    assert!(idle.clickable, "the primary action must expose Click");
+    assert!(idle.has_name());
+    assert_eq!(idle.label.as_deref(), Some(optimize.as_ref()));
+    assert!(
+        idle.disabled,
+        "with no relay selected the primary action is gated"
+    );
+
+    let running = find(
+        screen(&screens, "main_connected"),
+        automation::ACTION_PRIMARY,
+    );
+    let stop = crate::i18n::t("action.stop_optimizing").to_uppercase();
+    assert_eq!(running.role, Role::Button);
+    assert!(running.clickable);
+    assert_eq!(running.label.as_deref(), Some(stop.as_ref()));
+    assert!(
+        !running.disabled,
+        "while relaying the primary action is live"
+    );
+    assert_ne!(optimize, stop, "the accessible name must be state-driven");
+}
+
+/// The hero state word: a polite live region whose text is the node `value`
+/// (a `Label` carries text in `value`, not `name`), on all three route states.
+#[test]
+fn the_state_word_is_a_polite_live_region_that_carries_its_text() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    for (name, key) in [
+        ("main", "state.disconnected"),
+        ("main_connected", "state.optimizing"),
+        ("main_starved", "state.not_returning"),
+    ] {
+        let word = find(screen(&screens, name), automation::STATE_WORD);
+        assert_eq!(word.role, Role::Label);
+        assert_eq!(
+            word.live,
+            Some(Live::Polite),
+            "{name}: the state word must be a polite live region"
+        );
+        assert!(
+            word.live_atomic,
+            "{name}: the state word announces the whole node"
+        );
+        assert!(
+            word.label.is_none(),
+            "{name}: a Label carries its text in value, not name"
+        );
+        let expected = crate::i18n::t(key).to_uppercase();
+        assert_eq!(
+            word.value.as_deref(),
+            Some(expected.as_ref()),
+            "{name}: state word"
+        );
+        assert_eq!(word.text(), &*expected);
+    }
+}
+
+/// The starvation warning is an assertive Alert and exists only while starved.
+#[test]
+fn the_starvation_warning_is_an_assertive_alert_only_while_starved() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    let starved = screen(&screens, "main_starved");
+    let warning = find(starved, automation::WARNING);
+    assert_eq!(warning.role, Role::Alert);
+    assert_eq!(
+        warning.live,
+        Some(Live::Assertive),
+        "a fault the player must act on is assertive"
+    );
+    assert!(warning.live_atomic);
+    assert!(warning.has_name(), "an Alert is announced by its name");
+    let body = crate::i18n::t("route.relay_not_returning");
+    let word = crate::i18n::t("state.not_returning").to_uppercase();
+    let name = warning.label.as_deref().expect("the alert's name");
+    assert!(
+        name.contains(body.as_ref()),
+        "the alert must carry the warning sentence, got {name:?}"
+    );
+    assert!(
+        name.contains(&*word),
+        "the alert must carry the state word, got {name:?}"
+    );
+
+    for name in ["main", "main_connected"] {
+        let tree = screen(&screens, name);
+        assert!(
+            tree.by_automation_id(automation::WARNING).is_none(),
+            "{name}: a warning node exists without a starvation fault"
+        );
+        assert!(
+            !tree.nodes.iter().any(|node| node.role == Role::Alert),
+            "{name}: an Alert was rendered without a fault"
+        );
+    }
+}
+
+/// The default data-rail rows are findable by a stable id, uniquely, and their
+/// screen-reader text (the node `value`) names the row and carries the data.
+#[test]
+fn the_data_rail_rows_are_findable_and_read_out_their_value() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    let tree = screen(&screens, "main_connected");
+    let rows: [(&str, &[&str]); 3] = [
+        ("route.relay", &["192.0.2.10:4434"]),
+        ("route.relayed", &["1198", "1180"]),
+        ("route.game_server", &["203.0.113.9"]),
+    ];
+    for (key, needles) in rows {
+        let id = format!("{}{key}", automation::ROUTE_ROW);
+        assert_eq!(
+            count(tree, &id),
+            1,
+            "the row {key} must be addressed by exactly one node"
+        );
+        let node = find(tree, &id);
+        assert_eq!(node.role, Role::Label, "{key}: a data row reads as a Label");
+        assert!(
+            node.label.is_none(),
+            "{key}: the row's text lives in value, not name"
+        );
+        let label = crate::i18n::t(key).to_uppercase();
+        let text = node
+            .value
+            .as_deref()
+            .unwrap_or_else(|| panic!("the {key} row has no screen-reader text"));
+        assert!(
+            text.starts_with(&format!("{label}: ")),
+            "{key}: the row's name must lead its value, got {text:?}"
+        );
+        for needle in needles {
+            assert!(
+                text.contains(needle),
+                "{key}: {text:?} must carry the data {needle:?}"
+            );
+        }
+    }
+}
+
+/// The telemetry map is an Image whose accessible name is its alt text: the map
+/// description, with the relay the route is actually using.
+#[test]
+fn the_route_map_is_an_image_that_names_the_active_relay() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    for name in ["main", "main_connected"] {
+        let map = find(screen(&screens, name), automation::ROUTE_MAP);
+        assert_eq!(map.role, Role::Image, "{name}: the map must be an Image");
+        assert!(
+            map.label
+                .as_deref()
+                .is_some_and(|alt| !alt.trim().is_empty()),
+            "{name}: the map has no alt text (WidgetInfo::labeled puts it in name)"
+        );
+    }
+    let connected = find(screen(&screens, "main_connected"), automation::ROUTE_MAP);
+    let alt = connected.label.as_deref().expect("the map's alt text");
+    assert!(
+        alt.contains("TEST-NET Relay A"),
+        "the map must name the active relay, got {alt:?}"
+    );
+    assert!(
+        alt.to_lowercase().contains("active relay"),
+        "the map's alt text must say what it describes, got {alt:?}"
+    );
+    // With no relay selected the alt text must read the localized fallback, not
+    // a raw catalogue key (the review caught `route.missing_relay` here).
+    let idle = find(screen(&screens, "main"), automation::ROUTE_MAP);
+    let idle_alt = idle.label.as_deref().expect("the idle map's alt text");
+    assert!(
+        idle_alt.contains(crate::i18n::t("action_reason.missing_relay").as_ref()),
+        "the idle map must use the localized no-relay sentence, got {idle_alt:?}"
+    );
+    assert!(
+        !idle_alt.contains("route.missing_relay"),
+        "a raw catalogue key leaked into the map alt text: {idle_alt:?}"
+    );
+}
+
+/// The Details disclosure is a Button that reports its expanded state.
+#[test]
+fn the_details_disclosure_reports_its_expanded_state() {
+    let _guard = crate::i18n::test_lock();
+    let mut app = A11yApp::offline();
+    seed_connected_sample(&mut app.app);
+
+    let closed = app.render();
+    let details = find(&closed, automation::ROUTE_DETAILS);
+    assert_eq!(details.role, Role::Button);
+    assert!(details.has_name());
+    assert!(!details.expanded, "Details starts collapsed");
+
+    app.app.details_open = true;
+    let open = app.render();
+    assert!(
+        find(&open, automation::ROUTE_DETAILS).expanded,
+        "an open disclosure must report expanded"
+    );
+    assert!(
+        open.duplicate_automation_ids().is_empty(),
+        "opening Details must not duplicate a row id: {:?}",
+        open.duplicate_automation_ids()
+    );
+
+    app.app.details_open = false;
+    let collapsed = app.render();
+    assert!(
+        !find(&collapsed, automation::ROUTE_DETAILS).expanded,
+        "a closed disclosure must report collapsed"
+    );
+}
+
+/// The footer's always-present links are named Buttons; hide-to-tray is
+/// legitimately absent when the app has no tray to hide to.
+#[test]
+fn the_footer_offers_settings_and_quit_and_no_tray_hide() {
+    let _guard = crate::i18n::test_lock();
+    let mut app = A11yApp::offline();
+    assert!(
+        app.app.tray.is_none(),
+        "the offline app has no tray, so the footer cannot offer Hide"
+    );
+    let tree = app.render();
+    let settings = find(&tree, automation::FOOTER_SETTINGS);
+    let quit = find(&tree, automation::FOOTER_QUIT);
+    let settings_name = crate::i18n::t("settings.title");
+    let quit_name = crate::i18n::t("action.quit");
+    assert_eq!(settings.role, Role::Button);
+    assert_eq!(quit.role, Role::Button);
+    assert!(settings.has_name() && quit.has_name());
+    assert_eq!(settings.label.as_deref(), Some(settings_name.as_ref()));
+    assert_eq!(quit.label.as_deref(), Some(quit_name.as_ref()));
+    assert!(
+        tree.by_automation_id(automation::FOOTER_HIDE).is_none(),
+        "hide-to-tray must be absent when there is no tray"
+    );
+}
+
+/// Every sheet is exactly one Dialog carrying a named title and close control.
+#[test]
+fn every_sheet_is_a_dialog_with_a_named_title_and_close() {
+    let _guard = crate::i18n::test_lock();
+    let screens = all_screens();
+    let sheets = [
+        (
+            "settings",
+            automation::SETTINGS_SHEET,
+            automation::SETTINGS_BUTTON_CLOSE,
+            "settings.title",
+        ),
+        (
+            "game_editor",
+            automation::EDITOR_SHEET,
+            automation::EDITOR_BUTTON_CLOSE,
+            "game.editor_title",
+        ),
+        (
+            "target_picker",
+            automation::PICKER_SHEET,
+            automation::PICKER_BUTTON_CLOSE,
+            "game.target_process",
+        ),
+        (
+            "update",
+            automation::UPDATE_SHEET,
+            automation::UPDATE_BUTTON_CLOSE,
+            "update.sheet_title",
+        ),
+    ];
+    for (name, title_id, close_id, title_key) in sheets {
+        let tree = screen(&screens, name);
+        let dialogs = tree
+            .nodes
+            .iter()
+            .filter(|node| node.role == Role::Dialog)
+            .count();
+        assert_eq!(
+            dialogs, 1,
+            "{name}: a sheet must be exactly one Dialog node"
+        );
+        let title = find(tree, title_id);
+        assert_eq!(title.role, Role::Label, "{name}: the sheet title");
+        let expected = crate::i18n::t(title_key).to_uppercase();
+        assert!(
+            title.text().to_uppercase().contains(&*expected),
+            "{name}: the sheet title must carry {expected:?}, got {:?}",
+            title.text()
+        );
+        let close = find(tree, close_id);
+        assert_eq!(close.role, Role::Button, "{name}: the close control");
+        assert!(
+            close.has_name(),
+            "{name}: the close control has no accessible name"
+        );
+    }
+    for name in ["main", "main_connected", "main_starved"] {
+        let tree = screen(&screens, name);
+        assert!(
+            !tree.nodes.iter().any(|node| node.role == Role::Dialog),
+            "{name}: no sheet is open, so no Dialog may exist"
+        );
+    }
+}
+
+/// Accessible names are the active locale's copy, not the source language.
+#[test]
+fn accessible_names_follow_the_pinned_language() {
+    let _guard = crate::i18n::test_lock();
+    let mut app = A11yApp::offline();
+    crate::i18n::set_language(Some("de"));
+    let main = app.render();
+    let settings = find(&main, automation::FOOTER_SETTINGS);
+    let german = crate::i18n::t("settings.title");
+    assert_eq!(
+        settings.label.as_deref(),
+        Some(german.as_ref()),
+        "the footer name must be the German catalog copy"
+    );
+    assert_ne!(
+        settings.label.as_deref(),
+        Some("Settings"),
+        "the German frame must not read English"
+    );
+
+    app.app.show_settings = true;
+    let sheet = app.render();
+    let title = find(&sheet, automation::SETTINGS_SHEET);
+    let german_title = crate::i18n::t("settings.title").to_uppercase();
+    assert!(
+        title.text().to_uppercase().contains(&*german_title),
+        "the settings sheet title must be German, got {:?}",
+        title.text()
+    );
+    let close = find(&sheet, automation::SETTINGS_BUTTON_CLOSE);
+    let close_name = crate::i18n::t("action.close");
+    assert_eq!(close.label.as_deref(), Some(close_name.as_ref()));
+    crate::i18n::set_language(None);
+}
+
+/// Two dumps of the same offline state are the same tree: same screens, node
+/// order, roles, names and automation ids.
+#[test]
+fn the_dump_is_deterministic_across_two_runs() {
+    let _guard = crate::i18n::test_lock();
+    let first = dump_value().expect("the offline dump renders");
+    let second = dump_value().expect("the offline dump renders a second time");
+    let project =
+        |value: &serde_json::Value| -> Vec<(String, String, Option<String>, Option<String>)> {
+            let mut nodes = Vec::new();
+            for screen in value["screens"].as_array().expect("screens array") {
+                let name = screen["name"].as_str().expect("screen name").to_string();
+                for node in screen["tree"]["nodes"].as_array().expect("node list") {
+                    nodes.push((
+                        name.clone(),
+                        node["role"].as_str().expect("node role").to_string(),
+                        node["name"].as_str().map(str::to_string),
+                        node["automation_id"].as_str().map(str::to_string),
+                    ));
+                }
+            }
+            nodes
+        };
+    let a = project(&first);
+    let b = project(&second);
+    assert!(!a.is_empty(), "the dump produced no nodes");
+    assert_eq!(a.len(), b.len(), "the two dumps differ in node count");
+    if let Some((index, (left, right))) = a
+        .iter()
+        .zip(b.iter())
+        .enumerate()
+        .find(|(_, (left, right))| left != right)
+    {
+        panic!("the dump differs at node {index}: {left:?} vs {right:?}");
+    }
+}
+
+/// Walk a JSON value and collect every string it carries, decoded.
+fn collect_json_strings(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => out.push(text.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_json_strings(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_json_strings(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every dotted-quad IPv4 literal in `text`, unique, in first-seen order.
+fn ipv4_literals(text: &str, out: &mut Vec<std::net::Ipv4Addr>) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'.') {
+            index += 1;
+        }
+        let token = &text[start..index];
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+        let Ok(octets) = parts
+            .iter()
+            .map(|part| part.parse::<u8>())
+            .collect::<Result<Vec<u8>, _>>()
+        else {
+            continue;
+        };
+        let ip = std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
+    }
+}
+
+/// RFC 5737 documentation ranges: the only addresses a shipped fixture may use.
+fn is_test_net(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    matches!((a, b, c), (192, 0, 2) | (198, 51, 100) | (203, 0, 113))
+}
+
+/// The offline dump is a schema of the UI, never a record of this machine.
+#[test]
+fn the_dump_carries_no_real_user_data() {
+    let _guard = crate::i18n::test_lock();
+    let value = dump_value().expect("the offline dump renders");
+    let mut strings = Vec::new();
+    collect_json_strings(&value, &mut strings);
+
+    // The documented sample fixture must be present, or the checks are vacuous.
+    assert!(
+        strings.iter().any(|text| text.contains("sample-game.exe")),
+        "the documented sample-game fixture is missing from the dump"
+    );
+
+    // Only RFC 5737 TEST-NET addresses may appear.
+    let mut ips = Vec::new();
+    for text in &strings {
+        ipv4_literals(text, &mut ips);
+    }
+    assert!(
+        !ips.is_empty(),
+        "the sample must carry its TEST-NET addresses"
+    );
+    for ip in &ips {
+        assert!(
+            is_test_net(*ip) || *ip == std::net::Ipv4Addr::LOCALHOST,
+            "{ip} is not an RFC 5737 TEST-NET address (or the loopback fixture); \
+             the dump leaked a real address"
+        );
+    }
+
+    // No machine paths, home directory, or host name.
+    let profile = std::env::var("USERPROFILE").unwrap_or_default();
+    let host = std::env::var("COMPUTERNAME").unwrap_or_default();
+    for text in &strings {
+        if !profile.is_empty() {
+            assert!(
+                !text.contains(&profile),
+                "the user profile path leaked into the dump: {text:?}"
+            );
+        }
+        // A path fragment may only be the documented sample-game fixture.
+        if text.contains('\\') {
+            assert!(
+                text.contains("sample-game"),
+                "the dump carries a non-fixture Windows path: {text:?}"
+            );
+        }
+        for forbidden in [r"C:\Users", r"C:\Documents and Settings", r"\AppData\"] {
+            assert!(
+                !text.contains(forbidden),
+                "the dump carries a user path {forbidden:?}: {text:?}"
+            );
+        }
+        if host.len() >= 4 {
+            assert!(
+                !text.to_lowercase().contains(&host.to_lowercase()),
+                "the machine host name leaked into the dump: {text:?}"
+            );
+        }
+    }
+}
+
+/// The sub-line and the metric are separate nodes with their own stable ids;
+/// both are Labels whose text is the node `value`.
+#[test]
+fn the_state_detail_and_metric_are_separate_named_nodes() {
+    let _guard = crate::i18n::test_lock();
+    let screens = main_screens();
+    let idle = screen(&screens, "main");
+    assert_eq!(count(idle, automation::STATE_DETAIL), 1);
+    assert_eq!(count(idle, automation::ROUND_TRIP), 1);
+
+    let detail = find(idle, automation::STATE_DETAIL);
+    assert_eq!(detail.role, Role::Label);
+    assert!(detail.label.is_none());
+    let no_relay = crate::i18n::t("route.no_relay");
+    assert_eq!(detail.value.as_deref(), Some(no_relay.as_ref()));
+
+    let caption = crate::i18n::t("route.leg_relay").to_uppercase();
+    let idle_metric = format!("-- MS {caption}");
+    let metric = find(idle, automation::ROUND_TRIP);
+    assert_eq!(metric.role, Role::Label);
+    assert_eq!(metric.value.as_deref(), Some(idle_metric.as_str()));
+
+    let connected = screen(&screens, "main_connected");
+    let live_metric = format!("42 MS {caption}");
+    let metric = find(connected, automation::ROUND_TRIP);
+    assert_eq!(metric.value.as_deref(), Some(live_metric.as_str()));
+    let detail = find(connected, automation::STATE_DETAIL);
+    assert!(
+        detail.text().contains("192.0.2.10:4434"),
+        "the connected sub-line must name the relay in use, got {:?}",
+        detail.text()
+    );
+}
+
+/// A screen reader's Expand/Collapse pattern reaches the Details disclosure as
+/// an AccessKit action; egui drops that action, so the widget owns it.
+#[test]
+fn the_details_disclosure_opens_from_the_accesskit_expand_action() {
+    let _guard = crate::i18n::test_lock();
+    let mut harness = A11yApp::offline();
+    seed_connected_sample(&mut harness.app);
+    let tree = harness.render();
+    let target = find(&tree, automation::ROUTE_DETAILS).accesskit_id;
+    assert!(!harness.app.details_open, "Details starts collapsed");
+
+    let ctx = harness.ctx.clone();
+    let app = &mut harness.app;
+    let geometry = WindowGeometry {
+        monitor_height: Some(1080.0),
+        window_top: Some(0.0),
+    };
+    let raw = |action| eframe::egui::RawInput {
+        screen_rect: Some(eframe::egui::Rect::from_min_size(
+            eframe::egui::pos2(0.0, 0.0),
+            eframe::egui::vec2(320.0, 760.0),
+        )),
+        events: vec![eframe::egui::Event::AccessKitActionRequest(
+            eframe::egui::accesskit::ActionRequest {
+                action,
+                target_tree: eframe::egui::accesskit::TreeId::ROOT,
+                target_node: target,
+                data: None,
+            },
+        )],
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw(eframe::egui::accesskit::Action::Expand), |ui| {
+        app.render_ui(ui, geometry)
+    });
+    out.textures_delta.clear();
+    assert!(app.details_open, "Expand must open Details");
+
+    let mut out = ctx.run_ui(raw(eframe::egui::accesskit::Action::Collapse), |ui| {
+        app.render_ui(ui, geometry)
+    });
+    out.textures_delta.clear();
+    assert!(!app.details_open, "Collapse must close Details");
+}
+
+/// The error panel's own disclosure id must also obey a screen reader's
+/// Expand/Collapse request, and the app state must be the helper's final state.
+#[test]
+fn the_error_panel_details_opens_from_the_accesskit_expand_action() {
+    let _guard = crate::i18n::test_lock();
+    let mut harness = A11yApp::offline();
+    seed_error_sample(&mut harness.app);
+    let tree = harness.render();
+    let target = find(&tree, automation::ERROR_DETAILS).accesskit_id;
+    assert!(!harness.app.details_open, "Details starts collapsed");
+
+    let ctx = harness.ctx.clone();
+    let app = &mut harness.app;
+    let geometry = WindowGeometry {
+        monitor_height: Some(1080.0),
+        window_top: Some(0.0),
+    };
+    let raw = eframe::egui::RawInput {
+        screen_rect: Some(eframe::egui::Rect::from_min_size(
+            eframe::egui::pos2(0.0, 0.0),
+            eframe::egui::vec2(320.0, 760.0),
+        )),
+        events: vec![eframe::egui::Event::AccessKitActionRequest(
+            eframe::egui::accesskit::ActionRequest {
+                action: eframe::egui::accesskit::Action::Expand,
+                target_tree: eframe::egui::accesskit::TreeId::ROOT,
+                target_node: target,
+                data: None,
+            },
+        )],
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| app.render_ui(ui, geometry));
+    out.textures_delta.clear();
+    assert!(
+        app.details_open,
+        "the error panel's Expand action must reach the app state"
+    );
+}

@@ -256,3 +256,7 @@ connect = "Se connecter"
 disconnect = "Se déconnecter"
 quit = "Quitter"
 starved = "le relais ne renvoie pas le trafic de votre jeu"
+
+[a11y]
+route_map = "Carte du monde de la flotte de relais ; relais actif : {relay}. Les positions sont des estimations, pas des mesures."
+remove_relay = "Retirer le relais"

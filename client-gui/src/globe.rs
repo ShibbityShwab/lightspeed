@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 
+use crate::app::a11y::AccessKitResponse;
 use crate::design::{
     accent_text, border_1, grid, ice, map_bg, map_fleet, map_halo, map_halo_fill, map_land,
     on_accent, R_PANEL, S4, TRACK_FLEET,
@@ -203,8 +204,15 @@ pub fn draw_telemetry_map(
     width: f32,
     height: f32,
     markers: &[Marker],
+    description: &str,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    // The map is a canvas: a screen reader cannot read its dots, so it is
+    // reported as one Image named by the caller's localized description, and
+    // automation reaches it by a stable id.
+    let response = response
+        .a11y_widget(egui::accesskit::Role::Image, true, description)
+        .a11y_automation_id(crate::app::a11y::automation::ROUTE_MAP);
     let painter = ui.painter_at(rect);
 
     // Panel: map background + 1 px rule + 3 px radius (flat; no shadow).

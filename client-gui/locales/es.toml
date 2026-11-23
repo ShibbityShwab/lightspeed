@@ -256,3 +256,7 @@ connect = "Conectar"
 disconnect = "Desconectar"
 quit = "Salir"
 starved = "el relé no devuelve el tráfico de tu juego"
+
+[a11y]
+route_map = "Mapa del mundo de la flota de relés; relé activo: {relay}. Las ubicaciones son estimaciones, no mediciones."
+remove_relay = "Quitar relé"

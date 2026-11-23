@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Windows accessibility tree for the GUI** (`client-gui`). Every control now
+  reports a UIA role, a localized accessible name, its state and its actions
+  through AccessKit, and the custom-painted shell and sheets carry stable
+  `AutomationId` strings (`main.*`, `settings.*`, `update.*`, `editor.*`,
+  `picker.*`) so automation targets ids, never localized labels. The state word,
+  detected-game line and elevation/shell notice are polite live regions; the
+  starvation warning and the command-error panel are assertive `Alert`s; the
+  route `Details` disclosure reports expanded/collapsed and consumes the
+  AccessKit Expand/Collapse actions, so a screen reader's
+  `ExpandCollapsePattern` opens it (egui drops those actions by itself); the
+  painted map is a described `Image` node (its dots are not readable data), and
+  inline combo popups appear in the same tree as option nodes. The same tree
+  renders
+  headlessly: `lightspeed-gui --a11y-dump <path>` writes it as schema-1 JSON with
+  no window, no tray, no network and RFC 5737 TEST-NET sample state, for CI and
+  agent drivers, and `scripts/uia-tree.ps1` walks and asserts the live UIA tree
+  on Windows (`-ExpectAutomationId`, `-ExpectName`; exit 0/1/2). No
+  screen-reader hardware claim: the gate is `cargo test -p lightspeed-gui` plus a
+  live UIA dump; see `docs/accessibility.md`.
+
 ## [1.12.5] - 2026-11-23
 
 ### Changed
