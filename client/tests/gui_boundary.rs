@@ -349,9 +349,15 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/games.rs", 105),
     // W2-4b: `primary_action` and `relayed_row_text` were deleted (their rules
     // are pinned by the route-surface fixtures that render the slot and row).
-    ("client-gui/src/app/ledger.rs", 218),
+    // 2026-11-23 accessibility slice: the action button carries its AccessKit
+    // role/name/automation id, and the painted label cells expose their text.
+    ("client-gui/src/app/a11y.rs", 631),
+    ("client-gui/src/app/a11y_dump.rs", 420),
+    ("client-gui/src/app/ledger.rs", 220),
     ("client-gui/src/app/picker.rs", 98),
-    ("client-gui/src/app/presence.rs", 482),
+    // 2026-11-23 accessibility slice: `GamePresence::idle()` for the offline
+    // renderer (same constructor fields, no worker thread).
+    ("client-gui/src/app/presence.rs", 500),
     ("client-gui/src/app/relay_choice.rs", 60),
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
@@ -372,12 +378,17 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // compact footer row arithmetic, canonical-table dispatch, tray-gated effects);
     // 2957 -> 3137. WF-081b (Q5): the declined-notice assertion became
     // translation-aware; integrated count 3153.
-    ("client-gui/src/app/tests.rs", 3211),
+    // 2026-11-23 accessibility slice: 13 regression tests for the named tree,
+    // automation ids, live regions, sheets, localization and determinism.
+    ("client-gui/src/app/tests.rs", 4019),
     ("client-gui/src/app/theme.rs", 257),
     ("client-gui/src/app/watchdog.rs", 31),
     // W2-4b: `group_digits` (only ever called by the dead `relayed_row_text`
     // helper) is deleted; the rendered counters come from the one `RelayedPair`.
-    ("client-gui/src/app/widgets.rs", 1066),
+    // 2026-11-23 accessibility slice: painted helpers (rows, sections, footer,
+    // toggle, notices, editorial) report their text/role; the picker/editor
+    // fields carry names + ids; `sheet_title` returns its response.
+    ("client-gui/src/app/widgets.rs", 1147),
     // WF-081b (task-86): the one tier decision (ShellTier/shell_tier), the compact
     // footer padding arithmetic, and the canonical-table dispatch
     // (	ake_app_shortcut/shortcut_effect). 213 -> 341.
@@ -398,7 +409,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4734),
+    // 2026-11-23 accessibility slice: pre_frame/render_ui split for the offline
+    // renderer, the shell/row/map/notice labels and ids, and the dump switches.
+    ("client-gui/src/app.rs", 5031),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -417,7 +430,9 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // moved to `lightspeed_client::app::discovery`; only the one-shot `mpsc`
     // worker wrappers and the wrapper-answers test stay. 816 -> 78.
     ("client-gui/src/discovery.rs", 78),
-    ("client-gui/src/globe.rs", 353),
+    // 2026-11-23 accessibility slice: the telemetry map takes a localized
+    // description and reports itself as one Image node with a stable id.
+    ("client-gui/src/globe.rs", 361),
     // WF-081b (task-74): the capture/fixture locale override
     // (`LIGHTSPEED_LOCALE`, the same family as the app's `LIGHTSPEED_OPEN_*`
     // switches) plus its blank-tolerance test, so the 320x420 evidence captures
@@ -428,9 +443,11 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/i18n.rs", 544),
     // WF-081b task-81: the smoke hook now logs the `APP_TITLE` constant and holds
     // a bounded visible window, with a unit test pinning title + viewport; 377 -> 432.
-    ("client-gui/src/main.rs", 432),
+    // 2026-11-23 accessibility slice: the `--a11y-dump <path>` branch and its
+    // argv parser/tests (windowless JSON render for CI and agent drivers).
+    ("client-gui/src/main.rs", 518),
     // W2-3b S6c: `config_file` becomes the canonical/legacy path pair. 81 -> 91.
-    ("client-gui/src/paths.rs", 91),
+    ("client-gui/src/paths.rs", 105),
     ("client-gui/src/platform/linux.rs", 106),
     ("client-gui/src/platform/macos.rs", 98),
     // W2-4b: the `TrayAction` platform exemption is documented in place, so the

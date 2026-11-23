@@ -1,3 +1,4 @@
+use super::a11y::{automation, AccessKitResponse};
 use super::*;
 
 // The counter/state rules moved to the shared crate at W2-1 S3a. Re-exported so
@@ -81,6 +82,7 @@ pub(super) fn action_button(
     );
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ready && !in_flight, text));
+    let response = response.a11y_automation_id(automation::ACTION_PRIMARY);
     let hovered = response.hovered() && ready && !in_flight;
     let pressed = response.is_pointer_button_down_on() && ready && !in_flight;
 

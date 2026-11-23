@@ -1,5 +1,6 @@
 use super::*;
 
+use super::a11y::{automation, AccessKitResponse};
 use crate::platform::Animations;
 use eframe::egui::Color32;
 
@@ -65,6 +66,7 @@ pub(super) fn game_editor_body(
         &mut draft.name,
         i18n::t("game.editor_name_hint"),
         !verdict.name_ok,
+        automation::EDITOR_FIELD_NAME,
     );
     editor_field(
         ui,
@@ -72,6 +74,7 @@ pub(super) fn game_editor_body(
         &mut draft.process_names,
         i18n::t("game.editor_process_hint"),
         !verdict.processes_ok,
+        automation::EDITOR_FIELD_PROCESSES,
     );
     // The picker sits directly under the field it fills: choosing a row appends
     // its image name there, and the field stays a plain typed field.
@@ -95,19 +98,22 @@ pub(super) fn game_editor_body(
         &mut draft.udp_range,
         i18n::t("game.editor_udp_hint"),
         !verdict.udp_ok,
+        automation::EDITOR_FIELD_UDP_RANGE,
     );
     // No TCP field: the interception path is UDP-only, so the schema refuses a
     // `tcp_ports` entry and the editor must not offer what a save would refuse.
     ui.checkbox(
         &mut draft.dynamic_server,
         egui::RichText::new(i18n::t("game.editor_dynamic_server")).size(LABEL),
-    );
+    )
+    .a11y_automation_id(automation::EDITOR_DYNAMIC_SERVER);
     editor_field(
         ui,
         &i18n::t("game.editor_notes"),
         &mut draft.notes,
         i18n::t("game.editor_notes_hint"),
         false,
+        automation::EDITOR_FIELD_NOTES,
     );
 
     // Live validation, named on the field that carries it.
@@ -141,11 +147,17 @@ pub(super) fn game_editor_body(
     ui.horizontal(|ui| {
         if ui
             .add_enabled(verdict.ok(), egui::Button::new(i18n::t("game.editor_save")))
+            .a11y_automation_id(automation::EDITOR_BUTTON_SAVE)
             .clicked()
         {
             actions.save = true;
         }
-        if draft.editing.is_some() && ui.button(i18n::t("game.editor_delete")).clicked() {
+        if draft.editing.is_some()
+            && ui
+                .button(i18n::t("game.editor_delete"))
+                .a11y_automation_id(automation::EDITOR_BUTTON_DELETE)
+                .clicked()
+        {
             actions.delete = true;
         }
     });
@@ -172,7 +184,11 @@ pub(super) fn process_picker<'a>(
 ) -> Option<&'a ProcessEntry> {
     ui.add_space(S2);
     section_label(ui, &i18n::t("game.editor_process_picker"));
-    if ui.button(i18n::t("game.editor_process_refresh")).clicked() {
+    if ui
+        .button(i18n::t("game.editor_process_refresh"))
+        .a11y_automation_id(automation::PICKER_REFRESH)
+        .clicked()
+    {
         *refresh = true;
     }
 
@@ -182,7 +198,9 @@ pub(super) fn process_picker<'a>(
         egui::TextEdit::singleline(&mut *picker.search)
             .hint_text(i18n::t("game.editor_process_search_hint"))
             .desired_width(width),
-    );
+    )
+    .accessible_name(i18n::t("game.editor_process_search_hint"))
+    .a11y_automation_id(automation::PICKER_SEARCH);
 
     // Copied out of the borrow of `picker` so the chosen row can be handed back
     // with the picker's own lifetime.
@@ -253,13 +271,18 @@ pub(super) fn target_front_door(
                     .size(LABEL)
                     .color(text_1),
             );
-            if ui.link(i18n::t("game.target_clear")).clicked() {
+            if ui
+                .link(i18n::t("game.target_clear"))
+                .a11y_automation_id(automation::TARGET_CLEAR)
+                .clicked()
+            {
                 action.clear = true;
             }
         }
         None => {
             if ui
                 .button(i18n::t("game.target_process"))
+                .a11y_automation_id(automation::TARGET_PROCESS)
                 .on_hover_text(i18n::t("game.target_none"))
                 .clicked()
             {
@@ -331,6 +354,7 @@ fn editor_field(
     text: &mut String,
     hint: impl Into<egui::WidgetText>,
     invalid: bool,
+    automation_id: &str,
 ) {
     tracked_label(
         ui,
@@ -340,12 +364,16 @@ fn editor_field(
         TRACK_LABEL,
     );
     let width = ui.available_width();
+    // The visible label above the field is a separate painted node; name the
+    // field with the same localized words and give automation a stable id.
     ui.add_sized(
         [width, CONTROL_H],
         egui::TextEdit::singleline(text)
             .hint_text(hint)
             .text_color(if invalid { danger } else { text_1 }),
-    );
+    )
+    .accessible_name(label)
+    .a11y_automation_id(automation_id);
     if invalid {
         ui.label(
             egui::RichText::new(i18n::t("proxies.invalid"))
@@ -392,15 +420,17 @@ pub(super) fn section_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// A sheet title in the console voice: mono 12 px, uppercase, 0.24em tracking.
-pub(super) fn sheet_title(ui: &mut egui::Ui, text: &str) {
-    tracked_label(
-        ui,
-        &format!("/// {}", text.to_uppercase()),
-        TITLE,
-        text_1,
-        TRACK_SECTION,
+pub(super) fn sheet_title(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    // Returned so the sheet can attach its stable automation id to the title.
+    let response = ui.label(
+        egui::RichText::new(format!("/// {}", text.to_uppercase()))
+            .size(TITLE)
+            .family(console())
+            .color(text_1)
+            .extra_letter_spacing(TRACK_SECTION * TITLE),
     );
     ui.add_space(S2);
+    response
 }
 
 /// The shared frame for every in-window sheet: `bg-0`, a `border-1` hairline,
@@ -450,7 +480,8 @@ pub(super) fn focus_ring(ui: &egui::Ui, response: &egui::Response, radius: u8) {
 /// `Unknown` gaps), held on the app for the process lifetime.
 pub(super) fn progress_indicator(ui: &mut egui::Ui, text: &str, animations: Animations) -> bool {
     if animations.allows_motion() {
-        ui.add(egui::Spinner::new().size(16.0));
+        // The adjacent text carries the meaning; the spinner is decorative.
+        ui.add(egui::Spinner::new().size(16.0)).a11y_hidden();
     }
     ui.label(egui::RichText::new(text).size(BODY).color(text_2));
     true
@@ -466,7 +497,7 @@ pub(super) fn notice_frame(
     ui: &mut egui::Ui,
     danger_toned: bool,
     add_contents: impl FnOnce(&mut egui::Ui),
-) {
+) -> egui::Response {
     let (fill, edge, ink) = if danger_toned {
         (danger_soft, danger, danger)
     } else {
@@ -488,8 +519,9 @@ pub(super) fn notice_frame(
                 ui.visuals_mut().override_text_color = Some(ink);
                 add_contents(ui);
             });
-        });
-    let rect = response.response.rect;
+        })
+        .response;
+    let rect = response.rect;
     ui.painter().rect_filled(
         egui::Rect::from_min_size(
             egui::pos2(rect.left(), rect.top() + 1.0),
@@ -498,19 +530,37 @@ pub(super) fn notice_frame(
         0.0,
         edge,
     );
+    response
 }
 /// A focusable disclosure row: a painted marker (never a typed glyph — the
 /// bundled chains carry no `▸`) plus a label. Returns the new open state.
 ///
 /// The row is a real interactive control: a 24 px target, a focus ring, and
 /// Space/Enter activation through egui's button semantics.
-pub(super) fn disclosure_row(ui: &mut egui::Ui, label: &str, open: &mut bool) -> bool {
+pub(super) fn disclosure_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    open: &mut bool,
+    automation_id: Option<&str>,
+) {
     let rect = ui.available_rect_before_wrap();
     let row_h = HIT_MIN;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(rect.width(), row_h), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, *open, label));
-    if response.clicked() || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let response = response.a11y_disclosure(*open);
+    let response = match automation_id {
+        Some(id) => response.a11y_automation_id(id),
+        None => response,
+    };
+    // A screen reader's Expand/Collapse pattern arrives as an AccessKit action;
+    // egui drops those, so the widget owns the handling (and must not treat the
+    // same event as a click as well).
+    if let Some(requested) = super::a11y::disclosure_action(ui, response.id) {
+        *open = requested;
+    } else if response.clicked()
+        || response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    {
         *open = !*open;
     }
     let ink = if response.hovered() { text_1 } else { text_2 };
@@ -534,7 +584,6 @@ pub(super) fn disclosure_row(ui: &mut egui::Ui, label: &str, open: &mut bool) ->
         ink,
     );
     focus_ring(ui, &response, R_INLINE);
-    response.clicked()
 }
 
 // â”€â”€ Direction C console components (text, sections, rows, footer) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -613,7 +662,7 @@ pub(super) fn console_section(
     name: Option<&str>,
     meta: Option<&str>,
 ) {
-    let (rect, _) = ui.allocate_exact_size(
+    let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), SECTION_H),
         egui::Sense::hover(),
     );
@@ -669,6 +718,16 @@ pub(super) fn console_section(
             ],
             egui::Stroke::new(1.0, border_2),
         );
+    }
+    // A section header is painted, not added: expose the words it draws so a
+    // screen reader can orient inside the rail ("01 ROUTE …").
+    let spoken = [index, name, meta]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !spoken.is_empty() {
+        response.a11y_text(spoken);
     }
 }
 
@@ -765,7 +824,12 @@ pub(super) fn console_toggle(ui: &mut egui::Ui, label: &str, checked: bool) -> e
 /// The console footer: evenly spaced flat links with painted ` / ` separators;
 /// labels are fitted into their slot by solving the tracking within the 11 px
 /// floor. Returns the activated index.
-pub(super) fn console_footer(ui: &mut egui::Ui, labels: &[&str], height: f32) -> Option<usize> {
+pub(super) fn console_footer(
+    ui: &mut egui::Ui,
+    labels: &[&str],
+    height: f32,
+    automation_ids: &[&str],
+) -> Option<usize> {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -787,6 +851,10 @@ pub(super) fn console_footer(ui: &mut egui::Ui, labels: &[&str], height: f32) ->
             egui::Sense::click(),
         );
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
+        let response = match automation_ids.get(i) {
+            Some(id) => response.a11y_automation_id(id),
+            None => response,
+        };
         if response.hovered() {
             ui.painter()
                 .rect_filled(target, egui::CornerRadius::same(R_TAG), bg_2);
@@ -873,7 +941,9 @@ pub(super) fn console_row(
             egui::Stroke::new(1.0, border_1),
         );
     }
-    response
+    // The pair is painted; the accessible name is the one sentence a reader
+    // needs ("RELAY: LAX — Los Angeles").
+    response.a11y_text(format!("{label}: {value}"))
 }
 
 /// A stacked sentence row: a full-sentence "label" (e.g.
@@ -917,7 +987,11 @@ pub(super) fn console_sentence_row(
             egui::Stroke::new(1.0, border_1),
         );
     }
-    response
+    let spoken = match detail {
+        Some(detail) => format!("{sentence} {detail}"),
+        None => sentence.to_string(),
+    };
+    response.a11y_text(spoken)
 }
 
 /// A prose sentence in the Inter voice (banner body, notes, error detail).
@@ -940,7 +1014,7 @@ pub(super) fn console_editorial(ui: &mut egui::Ui, text: &str) {
         width - 10.0,
     );
     let height = galley.size().y + S2;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(
         egui::Rect::from_min_size(
@@ -955,6 +1029,7 @@ pub(super) fn console_editorial(ui: &mut egui::Ui, text: &str) {
         galley,
         text_2,
     );
+    response.a11y_text(text);
 }
 
 /// A two-column mini row for the Components table: 11 px label `dim`, 11 px
@@ -968,7 +1043,8 @@ pub(super) fn console_mini_row(ui: &mut egui::Ui, label: &str, value: &str) {
     let label_w = tracked_width(ui.painter(), &label_up, &font, TRACK_LABEL);
     let value_w = tracked_width(ui.painter(), value, &font, 0.0);
     if row_fits(label_w, value_w, width) {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
         let painter = ui.painter();
         paint_tracked(
             painter,
@@ -988,13 +1064,14 @@ pub(super) fn console_mini_row(ui: &mut egui::Ui, label: &str, value: &str) {
             text_2,
             0.0,
         );
+        response.a11y_text(format!("{label}: {value}"));
         return;
     }
     let value_galley = ui
         .painter()
         .layout(value.to_owned(), font.clone(), text_2, width);
     let height = 16.0 + S1 + value_galley.size().y + S1;
-    let (rect, _) =
+    let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, height.max(20.0)), egui::Sense::hover());
     let painter = ui.painter();
     paint_tracked(
@@ -1011,6 +1088,7 @@ pub(super) fn console_mini_row(ui: &mut egui::Ui, label: &str, value: &str) {
         value_galley,
         text_2,
     );
+    response.a11y_text(format!("{label}: {value}"));
 }
 
 /// Whether a label/value pair fits one console row: the variable row model
@@ -1026,7 +1104,7 @@ pub(super) fn console_field_row(
     label: &str,
     add_field: impl FnOnce(&mut egui::Ui),
 ) {
-    let (rect, _) = ui.allocate_exact_size(
+    let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), CONTROL_H),
         egui::Sense::hover(),
     );
@@ -1063,4 +1141,7 @@ pub(super) fn console_field_row(
             add_field(ui);
         },
     );
+    // The row's painted label names the control beside it; expose it as its
+    // own text node so the association is readable in order.
+    response.a11y_text(label.to_uppercase());
 }

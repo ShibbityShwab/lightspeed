@@ -256,3 +256,7 @@ connect = "接続"
 disconnect = "切断"
 quit = "終了"
 starved = "リレーがゲーム通信を返していません"
+
+[a11y]
+route_map = "World map of the relay fleet; active relay: {relay}. Locations are estimates, not measurements."
+remove_relay = "Remove relay"

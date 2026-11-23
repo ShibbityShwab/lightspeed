@@ -11,7 +11,15 @@ use lightspeed_client::app::config::ConfigPaths;
 /// Per-machine GUI data directory (`%LOCALAPPDATA%\Lightspeed` on Windows,
 /// `~/.local/share/Lightspeed` elsewhere). Holds the trace log and the
 /// single-instance lock file.
+///
+/// `LIGHTSPEED_DATA_DIR` overrides it wholesale. That is the supported way to
+/// run the GUI against a disposable profile for evidence/automation: the
+/// Windows known-folder API ignores `LOCALAPPDATA`/`APPDATA` overrides, so
+/// setting those alone does **not** isolate a run.
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("LIGHTSPEED_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::data_local_dir()
         .unwrap_or_default()
         .join("Lightspeed")
@@ -35,7 +43,13 @@ pub fn crash_log() -> PathBuf {
 
 /// User-editable config directory (`%APPDATA%\light-speed` on Windows,
 /// `~/.config/light-speed` elsewhere).
+///
+/// `LIGHTSPEED_CONFIG_DIR` overrides it wholesale for a disposable profile;
+/// see [`data_dir`] for why overriding `APPDATA` is not enough on Windows.
 pub fn config_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("LIGHTSPEED_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::config_dir().unwrap_or_default().join("light-speed")
 }
 

@@ -256,3 +256,7 @@ connect = "연결"
 disconnect = "연결 해제"
 quit = "종료"
 starved = "릴레이가 게임 트래픽을 반환하지 않고 있습니다"
+
+[a11y]
+route_map = "World map of the relay fleet; active relay: {relay}. Locations are estimates, not measurements."
+remove_relay = "Remove relay"
