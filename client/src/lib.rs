@@ -13,6 +13,7 @@
 pub mod app;
 pub mod engine;
 pub mod games;
+pub mod host;
 pub mod interceptor;
 
 pub use engine::{

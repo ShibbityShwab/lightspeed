@@ -206,6 +206,22 @@ pub struct InterceptorConfig {
     /// LightSpeed proxy address to relay intercepted traffic through.
     pub proxy_addr: SocketAddrV4,
 
+    /// Create the run with tunnelling withheld until the caller releases it.
+    ///
+    /// P0-4 / T12 (invariant I3): a caller that must choose a relay for the game
+    /// server *before* the first packet tunnels asks for the gate to be installed
+    /// already closed. Starting unheld and clearing the switch afterwards is a
+    /// race: a captured packet can be classified against an open gate between
+    /// `start()` returning and the caller's first `set_tunnelling_enabled(false)`,
+    /// which tunnelled a real match on a relay picked for the wrong server.
+    ///
+    /// Backends with a gate create it closed; backends without one (Linux, macOS)
+    /// ignore this and keep reporting no gate, so the caller must still read
+    /// [`InterceptorHandle::tunnelling_enabled`] rather than assume a hold happened.
+    /// Every builder defaults this to `false` (start enabled, the shipped
+    /// behaviour) so only a caller that opts in is held.
+    pub start_held: bool,
+
     /// Forward Error Correction enabled?
     pub fec_enabled: bool,
 
@@ -903,6 +919,7 @@ mod tests {
             path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+            start_held: false,
             fec_enabled: false,
             fec_k: 4,
             adaptive_fec: Default::default(),

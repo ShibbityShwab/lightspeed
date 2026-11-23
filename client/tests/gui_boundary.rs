@@ -355,9 +355,16 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     ("client-gui/src/app/a11y_dump.rs", 420),
     ("client-gui/src/app/ledger.rs", 220),
     ("client-gui/src/app/picker.rs", 98),
+    // P0-1 lifecycle instrumentation (2026-11-23, WinDivert stability reset):
+    // the GUI is the only place that can observe the render-side presence/card
+    // facts, so the behaviour-neutral event emission deliberately grew this
+    // worker. 482 -> 740. Pure rules stay in the core (`client/src/app/`); a
+    // reviewer who rejects the growth can move the scan-result vocabulary there
+    // without touching the worker's channels.
     // 2026-11-23 accessibility slice: `GamePresence::idle()` for the offline
     // renderer (same constructor fields, no worker thread).
-    ("client-gui/src/app/presence.rs", 500),
+    // Merge (2026-11-23): both changes kept; the measured count is 758.
+    ("client-gui/src/app/presence.rs", 758),
     ("client-gui/src/app/relay_choice.rs", 60),
     // W2-1b (S3a): the pure presentation seam + its contract fixtures; grown by
     // the W2-1c QA fixes (R1-R15) inside the same slice.
@@ -365,7 +372,17 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // so the deliberate growth is the fixture move, not new logic: 1915 -> 2268.
     // `route_surface` stays unfrozen for this cleanup only: no `ui()`/drawing
     // change, no new rendered state, no second caption implementation.
-    ("client-gui/src/app/route_surface.rs", 2268),
+    // P0-1 (2026-11-23): the route surface gained the pure `WordTracker` /
+    // `word_change_reason` seam and the error-key mapping the render-side
+    // `ui.word`/`ui.error` records need. 2268 -> 2482; the rendered rows and
+    // copy are unchanged.
+    // P0-3 (2026-11-23, roadmap D4 / invariant I7): the same seam gained the
+    // no-masking decision — `error_word_for` keeps the live word while a
+    // non-fatal route/registration failure is rendered as the existing warn
+    // banner, and only a latched capture fault may claim ERROR. The rendered
+    // copy keys are unchanged (the banner reuses the taxonomy sentence), so the
+    // growth is the rule plus its T13 fixture: 2482 -> 2570.
+    ("client-gui/src/app/route_surface.rs", 2570),
     // W2-4b: the eight retired helper tests left (six moved into the route-surface
     // fixtures, one dead formatter and one duplicate targeting test retired), and
     // one rendered-copy fixture arrived with them. 2853 -> 2618.
@@ -409,9 +426,22 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
+    // P0-1 lifecycle instrumentation (2026-11-23): `app_start`/exit intents,
+    // the render-side card/word observation seam and the presence transition
+    // records are the behaviour-neutral additions this patch required. 4734 ->
+    // 5235. No rendered state, command or engine path changed; the pure helpers
+    // live with the seam and the guard's `ui.word`/`ui_error` rules are pinned
+    // by the new tests in the same file.
+    // P0-4 (2026-11-23, roadmap §3.1 P0-4 / T15): the capture-crossing call
+    // sites now pass their `source` (button/auto/tray/system) and the
+    // start-of-run hold request, and the update-install click records its one
+    // `gui.action`. The pure records and the source vocabularies live in the
+    // core (`client/src/app/lifecycle.rs`, `commands.rs`); this file grew only
+    // by the call-site arguments and their comments. 5235 -> 5269.
     // 2026-11-23 accessibility slice: pre_frame/render_ui split for the offline
     // renderer, the shell/row/map/notice labels and ids, and the dump switches.
-    ("client-gui/src/app.rs", 5031),
+    // Merge (2026-11-23): both changes kept; the measured count is 5566.
+    ("client-gui/src/app.rs", 5566),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.

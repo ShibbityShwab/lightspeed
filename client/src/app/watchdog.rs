@@ -26,6 +26,7 @@ use crate::LightSpeedEngine;
 
 pub use super::dto::{ReturnPathFault, StarvationWarning};
 use super::history::{RelayHistory, RETURN_SHARE_DENOMINATOR};
+use super::lifecycle;
 
 /// Lock a mutex, recovering a poisoned lock instead of panicking.
 ///
@@ -698,6 +699,38 @@ pub fn spawn_relay_reply_watchdog(
                     &current.streak,
                     window,
                 )
+            );
+            // P0-1: the structured twin of the judged-window line. The verdict,
+            // streak and counters are the same values, so a harness can assert
+            // on fields instead of parsing prose. Log only; the warn-only policy
+            // above is unchanged.
+            let verdict = match window {
+                None => lifecycle::WatchdogVerdict::Healthy,
+                Some(ReturnPathFault::NoReplyFromRelay) => {
+                    lifecycle::WatchdogVerdict::NoReplyFromRelay
+                }
+                Some(ReturnPathFault::InjectionFailed) => {
+                    lifecycle::WatchdogVerdict::InjectionFailed
+                }
+                Some(ReturnPathFault::TooFewReplies) => lifecycle::WatchdogVerdict::TooFewReplies,
+            };
+            lifecycle::emit(
+                "watchdog",
+                &lifecycle::Watchdog {
+                    verdict,
+                    streak: current.streak.count,
+                    fault: confirmed.map(|fault| format!("{fault:?}")),
+                    action: if confirmed.is_some() {
+                        lifecycle::WatchdogAction::Demote
+                    } else {
+                        lifecycle::WatchdogAction::Keep
+                    },
+                    relay: relay_now.map(|relay| relay.to_string()),
+                    server: Some(server.to_string()),
+                    intercepted: intercepted_since,
+                    injected: injected_since,
+                    from_relay: from_proxy_since,
+                },
             );
             // Each judgement starts a fresh window: the next verdict must be new
             // evidence, not the same counters re-read half a second later.

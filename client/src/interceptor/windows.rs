@@ -1059,15 +1059,17 @@ impl TrafficInterceptor for WinDivertInterceptor {
 
         // ── Pinned driver: open the permanent non-diverting handle FIRST ──
         //
-        // The pin keeps the WinDivert driver/service loaded across the
-        // intercept/inject/shadow open+close churn of a normal Stop/start, which
-        // is what prevents the unload/reload race that left a WFP filter
-        // registered (the next open's `FWP_E_IN_USE`). It is idempotent: the
-        // engine normally pins once before the first start and releases at app
-        // shutdown, and a caller that skipped the pin still gets the driver held
-        // for this session. A pin failure is not fatal here: the diverting
-        // opens below report their own failure with the actionable remedy, and
-        // a session that cannot open its diverting handles fails closed.
+        // The pin keeps the WinDivert driver referenced across the
+        // intercept/inject/shadow open+close cycle of a normal Stop/start. It is
+        // not a WFP-state guarantee: the pin owns no WFP object, and the
+        // 2026-11-23 field trace has the pin active while the next intercept
+        // open still failed `FWP_E_IN_USE`. It is idempotent: the engine
+        // normally pins once before the first start and releases at app
+        // shutdown, and a caller that skipped the pin still gets the driver
+        // referenced for this session. A pin failure is not fatal here: the
+        // diverting opens below report their own failure with the actionable
+        // remedy, and a session that cannot open its diverting handles fails
+        // closed.
         if let Err(reason) = super::pin_driver() {
             tracing::warn!(
                 "WinDivert driver pin unavailable; starting without a pinned driver: {reason}"
@@ -1251,14 +1253,24 @@ impl TrafficInterceptor for WinDivertInterceptor {
         // Shared state
         let counters = Arc::new(InterceptorCounters::default());
         let running = Arc::new(AtomicBool::new(true));
-        // Where the run is allowed to tunnel. Starts ENABLED so every existing
-        // caller behaves exactly as before; a caller that wants to hold traffic
-        // until it has chosen a relay for the game server clears it first and
-        // sets it once the choice is made. Gated here, at the action layer, so
+        // Where the run is allowed to tunnel. Normally starts ENABLED so every
+        // existing caller behaves exactly as before; a caller that wants to hold
+        // traffic until it has chosen a relay for the game server sets
+        // `InterceptorConfig::start_held` and gets the gate created CLOSED here,
+        // *before* the first packet can be classified (P0-4 / T12, invariant I3).
+        // Clearing the switch after `start()` returned was a race: a captured
+        // packet could tunnel in that window. Gated here, at the action layer, so
         // attribution and server discovery keep running throughout: holding must
         // not make the destination unknowable, or nothing could ever release it.
-        let tunnelling = Arc::new(AtomicBool::new(true));
-        tracing::info!("✅ Shared state created");
+        let tunnelling = Arc::new(AtomicBool::new(!config.start_held));
+        tracing::info!(
+            "✅ Shared state created (tunnelling {})",
+            if config.start_held {
+                "held until released"
+            } else {
+                "enabled"
+            }
+        );
 
         // Pre-seed detected_server if we already know it from the route scanner.
         if let Some(s) = pre_known_server {
@@ -2407,16 +2419,21 @@ impl Drop for HandleShutdownGuard {
     }
 }
 
-/// Log a WinDivert open failure, calling out stale WFP state when the OS
-/// reports `FWP_E_IN_USE` so the fix (cold shutdown or killing the stale
-/// process) is visible next to the raw error.
+/// Log a WinDivert open failure.
+///
+/// `FWP_E_IN_USE` means a WFP object is still referenced - a previous process's
+/// filter, or a callout being registered/unregistered concurrently. The code
+/// alone does not identify the holder, so the line states the condition and the
+/// bounded recovery instead of presenting a cause it cannot know.
 #[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
 fn log_open_failure(handle_role: &str, err: &std::io::Error) {
     if is_fwp_in_use(err) {
         tracing::error!(
-            "❌ WinDivert {handle_role} open failed: {err}. A previous LightSpeed run \
-             left its WFP filter/callout registered; do a full cold shutdown or close \
-             the stale LightSpeed process, then try again."
+            "❌ WinDivert {handle_role} open failed: {err}. A WFP object is still \
+             referenced (a previous process's filter, or a callout being \
+             registered/unregistered concurrently); the error code does not \
+             identify the holder. The open retry is bounded; if the condition \
+             survives it, use the R1-R4 recovery ladder from the remedy."
         );
     } else {
         tracing::error!("❌ WinDivert {handle_role} open failed: {err}");
@@ -3124,7 +3141,11 @@ mod tests {
         let blocked = driver_open_remedy(&std::io::Error::from_raw_os_error(1275));
         assert!(blocked.contains("blocked"), "{blocked}");
         let stale = driver_open_remedy(&std::io::Error::from_raw_os_error(0x8032_000A_u32 as i32));
-        assert!(stale.contains("stale WFP filter"), "{stale}");
+        assert!(stale.contains("FWP_E_IN_USE"), "{stale}");
+        assert!(
+            stale.contains("R1") && stale.contains("R4"),
+            "the stale-state remedy is the R1-R4 recovery ladder: {stale}"
+        );
     }
 
     #[test]

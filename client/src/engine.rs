@@ -14,6 +14,13 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
+use crate::app::dto::{AppErrorKind, ErrorClearRule, ErrorLedger, ErrorSource};
+use crate::app::lifecycle::{
+    self, InterceptReason, RegistrationOutcome, SessionCloseReason, ShutdownReason,
+};
+use crate::app::status::{
+    CaptureFault, RegistrationApplied, RegistrationAttempt, RegistrationStatus,
+};
 use crate::games::TransportProto;
 use crate::interceptor::process_scanner::find_pid_by_name;
 use crate::interceptor::InterceptorConfig;
@@ -140,6 +147,13 @@ pub struct InterceptorRequest {
     /// line. `true` for the shipped/shared paths; a live mode that prints its own
     /// activation line sets `false` so the CLI output stays byte-identical.
     pub announce_start: bool,
+    /// Create the run with tunnelling withheld until the caller releases it.
+    ///
+    /// P0-4 / T12 (invariant I3): the GUI asks for this so the relay hold exists
+    /// before the first captured packet can be tunnelled. It is carried into
+    /// [`InterceptorConfig::start_held`] by [`LightSpeedEngine::plan_interceptor`].
+    /// Defaults to `false` (start unheld, the shipped behaviour).
+    pub hold_on_start: bool,
 }
 
 impl InterceptorRequest {
@@ -156,6 +170,7 @@ impl InterceptorRequest {
             process_target: None,
             server_override: None,
             announce_start: true,
+            hold_on_start: false,
         }
     }
 
@@ -190,6 +205,18 @@ impl InterceptorRequest {
     /// prints its own activation line and must not gain a second one).
     pub fn with_announce_start(mut self, announce: bool) -> Self {
         self.announce_start = announce;
+        self
+    }
+
+    /// Request the tunnelling hold before the first packet (P0-4 / T12).
+    ///
+    /// `true` makes [`LightSpeedEngine::plan_interceptor`] set
+    /// [`InterceptorConfig::start_held`], so a backend with a gate creates it
+    /// closed. The caller must still release it: a platform without a gate
+    /// reports `None` from [`InterceptorHandle::tunnelling_enabled`], never a
+    /// pretended hold.
+    pub fn with_hold_on_start(mut self, hold: bool) -> Self {
+        self.hold_on_start = hold;
         self
     }
 }
@@ -482,6 +509,14 @@ pub struct EngineStatus {
     pub bypass_direct: u64,
     /// Evaluations whose computed decision was Hold.
     pub bypass_hold: u64,
+
+    // ── Registration / error state machine (P0-3, roadmap D4) ──────────────
+    /// The registration generation guard, ledger and the one active session.
+    pub registration: RegistrationStatus,
+    /// The latched capture-plane fault, if one is current.
+    pub capture_fault: Option<CaptureFault>,
+    /// Typed error records by source, each with its own epoch and clear rule.
+    pub errors: ErrorLedger,
 }
 
 impl EngineStatus {
@@ -541,6 +576,17 @@ const TEARDOWN_INCOMPLETE: &str = "previous interception did not shut down clean
 /// The `EngineStatus` copy of [`TEARDOWN_INCOMPLETE`], shown by the Error row.
 const TEARDOWN_INCOMPLETE_STATUS: &str = "Previous interception did not shut down cleanly. \
      Restart LightSpeed before starting again so its WinDivert filter can be released.";
+
+/// Why a start is refused while a healthy interception run is already live.
+///
+/// P0-4 / invariant I2 (`docs/audit/game-transition-state-machine-2026-11-23.md`
+/// §5.4): a start request must never stop a healthy run to start another — the
+/// old one-shot path did exactly that, which is the "implicit pre-stop" that can
+/// turn a start during a live session into a silent teardown and reopen. The
+/// shipped `start_interceptor_request` keeps the refusal here; the explicit
+/// restart path is [`LightSpeedEngine::restart_interceptor_request`].
+pub const ALREADY_INTERCEPTING: &str =
+    "interception is already running; stop it first, or use restart";
 
 /// The process-wide driver pin seam.
 ///
@@ -635,6 +681,14 @@ pub struct LightSpeedEngine {
     telemetry_proxy: Option<SocketAddrV4>,
     /// Wire game id attached to telemetry reports (`UNKNOWN` until a game runs).
     telemetry_game_id: u8,
+    /// P0-1 lifecycle: the last capture-plane state this engine recorded
+    /// (`idle` / `boosting`). Recording only; nothing reads it for decisions.
+    lifecycle_interceptor_state: &'static str,
+    /// P0-1 lifecycle: when the state above was last recorded, for `duration_ms`.
+    lifecycle_interceptor_state_at: Instant,
+    /// P0-1 lifecycle: the process shutdown record is written once, even though
+    /// `Drop` also calls [`Self::shutdown`].
+    lifecycle_shutdown_emitted: bool,
 }
 
 impl LightSpeedEngine {
@@ -666,6 +720,9 @@ impl LightSpeedEngine {
             telemetry_flush: None,
             telemetry_proxy: None,
             telemetry_game_id: lightspeed_protocol::game_id::UNKNOWN,
+            lifecycle_interceptor_state: "idle",
+            lifecycle_interceptor_state_at: Instant::now(),
+            lifecycle_shutdown_emitted: false,
         }
     }
 
@@ -756,9 +813,9 @@ impl LightSpeedEngine {
         let status = Arc::clone(&self.status);
         let (tx, rx) = oneshot::channel();
         self.rt.spawn(async move {
-            let registered = match destination {
+            let attempt = match destination {
                 Some(destination) => {
-                    crate::quic::register_session_with_destination(
+                    crate::quic::register_session_with_destination_attempt(
                         relay,
                         control_port,
                         Some(destination),
@@ -766,18 +823,39 @@ impl LightSpeedEngine {
                     )
                     .await
                 }
-                None => crate::quic::register_session(relay, control_port, path_mtu_cap).await,
-            };
-            if let Some(token) = registered {
-                crate::session::set_current_proxy(relay);
-                if let Ok(mut s) = status.write() {
-                    s.proxy_addr = relay.to_string();
-                    s.control_registered = true;
-                    s.session_token = Some(token);
-                    s.registration_error = None;
+                None => {
+                    crate::quic::register_session_attempt(relay, control_port, path_mtu_cap).await
                 }
+            };
+            let result = RegistrationAttempt {
+                relay: Some(relay.to_string()),
+                destination,
+                generation: attempt.generation,
+                outcome: attempt.outcome,
+                session: attempt.session,
+                close_reason: attempt.close_reason,
+            };
+            // P0-3 generation guard: a retired generation's late switch result
+            // publishes nothing, and a failed candidate never touches the
+            // registered session's projection (`project_failure = false`).
+            let applied = match status.write() {
+                Ok(mut s) => {
+                    let applied = publish_registration(&mut s, &result, false, "relay_switch");
+                    if applied == RegistrationApplied::Published
+                        && result.outcome == RegistrationOutcome::Ok
+                    {
+                        s.proxy_addr = relay.to_string();
+                    }
+                    applied
+                }
+                Err(_) => RegistrationApplied::Superseded,
+            };
+            if applied == RegistrationApplied::Published
+                && result.outcome == RegistrationOutcome::Ok
+            {
+                crate::session::set_current_proxy(relay);
             }
-            let _ = tx.send(registered);
+            let _ = tx.send(result.session);
         });
         RelaySwitch { rx }
     }
@@ -854,8 +932,9 @@ impl LightSpeedEngine {
     }
 
     /// Spawn the QUIC control-plane registration task, recording its outcome
-    /// in the shared status instead of discarding it. The relay is tracked so
-    /// [`Self::disconnect`] and mode switches can stop its reconnect supervisor.
+    /// through the generation-guarded state machine instead of writing status
+    /// directly. The relay is tracked so [`Self::disconnect`] and mode switches
+    /// can stop its reconnect supervisor.
     fn spawn_registration(&mut self, proxy_addr: SocketAddrV4) {
         if !self.supervised_paths.contains(&proxy_addr) {
             self.supervised_paths.push(proxy_addr);
@@ -867,10 +946,23 @@ impl LightSpeedEngine {
         // still emits 1,472-byte control datagrams (issue #178).
         let path_mtu_cap = self.path_mtu_cap;
         self.rt.spawn(async move {
-            let result =
-                crate::quic::register_session(proxy_addr, control_port, path_mtu_cap).await;
+            let attempt =
+                crate::quic::register_session_attempt(proxy_addr, control_port, path_mtu_cap).await;
+            let result = RegistrationAttempt {
+                relay: Some(proxy_addr.to_string()),
+                destination: None,
+                generation: attempt.generation,
+                outcome: attempt.outcome,
+                session: attempt.session,
+                close_reason: attempt.close_reason,
+            };
+            // P0-3: the write carries this result's generation. A retired
+            // generation (`Superseded`) is discarded and counted, never mapped
+            // to a failure (invariants I5/I13).
             if let Ok(mut s) = status.write() {
-                apply_registration_result(&mut s, result);
+                publish_registration(&mut s, &result, true, "connect");
+            } else {
+                emit_registration("connect", &result, RegistrationApplied::Superseded);
             }
         });
     }
@@ -890,6 +982,10 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.stop_supervised();
+        // The control-plane session this process owned ends here; the data
+        // plane's tokens survive (invariant I12), but the registration ledger
+        // and the trace must show the close (P0-3 / D4 item 2).
+        self.note_registration_closed(SessionCloseReason::ClientQuit);
         self.stop_telemetry_flush();
         if let Ok(mut s) = self.status.write() {
             s.connected = false;
@@ -1032,6 +1128,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.stop_supervised();
+        self.note_registration_closed(SessionCloseReason::ClientQuit);
         self.redirect_stats = None;
         if let Ok(mut s) = self.status.write() {
             s.redirect_active = false;
@@ -1162,6 +1259,7 @@ impl LightSpeedEngine {
             let _ = tx.send(());
         }
         self.stop_supervised();
+        self.note_registration_closed(SessionCloseReason::ClientQuit);
         self.capture_stat_slot = None;
         if let Ok(mut s) = self.status.write() {
             s.capture_active = false;
@@ -1474,6 +1572,54 @@ impl LightSpeedEngine {
             .is_some_and(crate::interceptor::InterceptorHandle::is_active)
     }
 
+    /// Whether a start must be refused because a healthy run is already live.
+    ///
+    /// "Healthy" is the **capture plane**, not the route plane: a registration
+    /// or route warning must never make a start replace a working session (the
+    /// field incident's stale card was exactly that kind of non-fatal error).
+    /// A dead data plane (`run_failed`) or a latched fatal capture fault is
+    /// *degraded*: a start may tear that handle down through the normal
+    /// teardown, exactly as before (P0-4 / invariant I2).
+    fn interception_run_is_healthy(&self) -> bool {
+        let Some(handle) = self.interceptor_handle.as_ref() else {
+            return false;
+        };
+        let fatal = handle.snapshot().last_error.is_some()
+            || read_or_recover(&self.status).capture_fault.is_some();
+        handle.is_active() && !fatal
+    }
+
+    /// Refuse a start while a healthy run is live, recording the refusal once
+    /// through the existing P0-1 `interceptor_state` intent.
+    ///
+    /// Nothing else happens: the live handle, its hold and its registration all
+    /// stay exactly as they were. That is the whole point of P0-4 — a start is
+    /// not an implicit Stop.
+    fn refuse_start_if_healthy(&mut self) -> Result<(), String> {
+        if !self.interception_run_is_healthy() {
+            return Ok(());
+        }
+        self.note_interceptor_failure();
+        Err(ALREADY_INTERCEPTING.to_string())
+    }
+
+    /// Test-only: install an in-memory interceptor handle as the live run.
+    ///
+    /// The command layer's P0-4 tests must exercise "a start while a healthy run
+    /// is live" without opening a real driver handle (the kernel is dirty by
+    /// contract and the backend is platform-dependent). Never compiled into a
+    /// release build.
+    #[cfg(test)]
+    pub(crate) fn install_mock_interceptor_for_test(
+        &mut self,
+        handle: crate::interceptor::InterceptorHandle,
+    ) {
+        self.interceptor_handle = Some(handle);
+        if let Ok(mut status) = self.status.write() {
+            status.interceptor_active = true;
+        }
+    }
+
     /// Liveness counters for the GUI's no-reply watchdog.
     pub fn interceptor_health(&self) -> Option<InterceptorHealth> {
         self.interceptor_handle.as_ref().map(|handle| {
@@ -1576,19 +1722,63 @@ impl LightSpeedEngine {
     /// applied verbatim instead of derived from `fec`, and `server_override`
     /// adds the fallback route the CLI's `--server-addr` names. The shipped path
     /// above is exactly this request with the old derivation.
+    ///
+    /// **P0-4 (invariant I2): a start is not a Stop.** While a *healthy* run is
+    /// live this refuses with [`ALREADY_INTERCEPTING`] and touches nothing; only
+    /// a dead data plane or a latched fatal capture fault is torn down, which is
+    /// the one case the old unconditional pre-stop ever needed to handle. An
+    /// intentional teardown-and-reopen is [`Self::restart_interceptor_request`].
     pub fn start_interceptor_request(&mut self, request: InterceptorRequest) -> Result<(), String> {
-        // The shipped one-shot API stops any running interceptor before it
-        // validates the new request; keep that exact order. A teardown that
-        // could not be acknowledged fails closed instead of opening a second
-        // WinDivert filter beside the old one.
-        self.stop_supervised();
+        // Refuse before planning: a rejected start must not run the process
+        // scanner, stop a registration or touch the live handle.
+        self.refuse_start_if_healthy()?;
+        // A degraded/dead handle is replaced through the normal teardown. The
+        // teardown is only reached when the run is not healthy, so a failed
+        // teardown here still fails closed rather than opening a second filter.
         if self.interceptor_handle.is_some() && !self.stop_interceptor() {
-            return Err(
-                "previous interception did not shut down cleanly; restart LightSpeed before starting again"
-                    .to_string(),
-            );
+            return Err(TEARDOWN_INCOMPLETE.to_string());
         }
         let plan = self.plan_interceptor(request)?;
+        self.start_interceptor_plan(plan)
+    }
+
+    /// Explicit restart: stop the current run (healthy or not) and start again.
+    ///
+    /// This is the **only** start path that may tear down a healthy run, and it
+    /// only does so because the caller asked for a restart. It is what the GUI's
+    /// explicit restart action and the error card's Retry path use, so no front
+    /// end has to abuse `StartRequested` as an implicit Stop. The lifecycle
+    /// reason is the caller's (`lifecycle::set_intent` with `error_retry` /
+    /// `auto_recover` / `user_start`); this method changes no intent itself.
+    ///
+    /// A teardown that cannot be acknowledged still fails closed, exactly as the
+    /// shipped one-shot path did.
+    pub fn restart_interceptor_request(
+        &mut self,
+        request: InterceptorRequest,
+    ) -> Result<(), String> {
+        let plan = self.plan_interceptor(request)?;
+        self.restart_interceptor_plan(plan)
+    }
+
+    /// Explicit restart of a prepared plan: stop the current run (healthy or
+    /// not) and start the plan.
+    ///
+    /// The plan half of [`Self::restart_interceptor_request`], symmetric with
+    /// [`Self::start_interceptor_plan`]. This is the only start that may replace
+    /// a healthy run, because the caller named it a restart.
+    pub fn restart_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
+        // A restart whose new run cannot start must not take the current one
+        // down: check the plan before the only unconditional teardown in the
+        // engine. (Unlike a plain start, a restart is explicitly allowed to stop
+        // a healthy run, but only to replace it.)
+        if let Err(reason) = &plan.facts.available {
+            return Err(reason.clone());
+        }
+        self.stop_supervised();
+        if self.interceptor_handle.is_some() && !self.stop_interceptor() {
+            return Err(TEARDOWN_INCOMPLETE.to_string());
+        }
         self.start_interceptor_plan(plan)
     }
 
@@ -1692,6 +1882,11 @@ impl LightSpeedEngine {
 
         let mut config = config;
         config.path_mtu = self.path_mtu_cap;
+        // P0-4 / T12: the plan's config is the exact struct the backend's
+        // `start()` receives, so carrying the caller's hold request here is what
+        // lets the gate be created already closed. The builder's default stays
+        // `false`, so every existing caller starts unheld.
+        config.start_held = request.hold_on_start;
 
         // A known game server the caller supplied (the CLI's `--server-addr`)
         // seeds the same fallback route the CLI builds for itself: no local
@@ -1754,11 +1949,16 @@ impl LightSpeedEngine {
     /// handle as the shipped one-shot path. An unavailable backend is reported
     /// here with the backend's own reason and nothing is started, which is where
     /// the shipped path refused too.
+    ///
+    /// P0-4 (invariant I2): like [`Self::start_interceptor_request`], a plan
+    /// start refuses a healthy running session with [`ALREADY_INTERCEPTING`]
+    /// instead of pre-stopping it. Only a dead/degraded run is replaced.
     pub fn start_interceptor_plan(&mut self, plan: InterceptorPlan) -> Result<(), String> {
         // Fail closed FIRST, before anything reads the handle: a timed-out
         // teardown takes the handle, so `handle.is_some()` is not evidence the
         // kernel filter is clear. This must stay the very first statement.
         if self.interceptor_teardown_incomplete {
+            self.note_capture_fault("teardown_incomplete", TEARDOWN_INCOMPLETE);
             return Err(TEARDOWN_INCOMPLETE.to_string());
         }
         // Refuse an unavailable plan before touching a running session: a plan
@@ -1766,14 +1966,25 @@ impl LightSpeedEngine {
         if let Err(reason) = &plan.facts.available {
             return Err(reason.clone());
         }
+        // P0-4 (invariant I2): a plan start is a start, not a restart. Refuse
+        // before the pin is touched or the live run is read any further, so a
+        // start that arrives while the GUI believes it is idle can never silently
+        // tear down a healthy running session.
+        self.refuse_start_if_healthy()?;
         // The pin must exist before the first diverting handle opens. Stop keeps
         // it, so only the first start of a process pays the driver load.
-        self.ensure_driver_pinned()?;
-        // The plan path is public and is called directly by the live modes. It
-        // must not assume the caller stopped the previous run first. A handle
-        // whose data plane died (`run_failed`) is torn down here too: a dead
-        // session is never resumed in place by this engine.
+        if let Err(err) = self.ensure_driver_pinned() {
+            self.note_interceptor_failure();
+            self.note_capture_fault("driver_pin", &err);
+            return Err(err);
+        }
+        // The plan path is public and is called directly by the live modes; it
+        // must not assume the caller stopped a *degraded* run first. A handle
+        // whose data plane died (`run_failed`) or whose capture fault is latched
+        // is torn down here: a dead session is never resumed in place. A healthy
+        // handle never reaches this line (it was refused above).
         if self.interceptor_handle.is_some() && !self.stop_interceptor() {
+            self.note_capture_fault("teardown_incomplete", TEARDOWN_INCOMPLETE);
             return Err(TEARDOWN_INCOMPLETE.to_string());
         }
         let InterceptorPlan {
@@ -1819,8 +2030,14 @@ impl LightSpeedEngine {
                 // A failed start must drain the registration this plan just
                 // spawned; otherwise every failed attempt leaves a supervisor
                 // retrying a relay nothing is using.
+                self.note_interceptor_failure();
                 self.stop_supervised();
-                return Err(error.to_string());
+                let detail = error.to_string();
+                // The field failure: a WinDivert open that returns FWP_E_IN_USE
+                // moments after a close. The typed fault carries the close age so
+                // a reviewer does not have to infer it from two trace lines.
+                self.note_capture_fault("windivert_open", &detail);
+                return Err(detail);
             }
         };
 
@@ -1849,6 +2066,9 @@ impl LightSpeedEngine {
             s.session_token = None;
             s.registration_error = None;
         }
+        // The start succeeded: this is the same-source healthy result that
+        // clears a latched capture fault (P0-3 / invariant I6).
+        self.clear_capture_fault();
 
         if announce_start {
             tracing::info!(
@@ -1860,6 +2080,7 @@ impl LightSpeedEngine {
         }
 
         self.interceptor_handle = Some(handle);
+        self.note_interceptor_state("boosting");
         // A successful real start is the proof that the driver is usable; it is
         // the only latch-clearing event, avoiding a separate probe handle that
         // could itself interfere with WinDivert's WFP cleanup.
@@ -1989,6 +2210,144 @@ impl LightSpeedEngine {
         }
     }
 
+    /// Record one capture-plane transition (P0-1; logging only).
+    ///
+    /// Reads the intent the front end stamped on the command, the pin state and
+    /// the elapsed time in the previous state. Nothing branches on the record.
+    fn note_interceptor_state(&mut self, to: &'static str) {
+        let intent = lifecycle::current_intent();
+        let now = Instant::now();
+        let duration_ms = now
+            .duration_since(self.lifecycle_interceptor_state_at)
+            .as_millis() as u64;
+        let event = lifecycle::InterceptorState {
+            from: self.lifecycle_interceptor_state.to_string(),
+            to: to.to_string(),
+            reason: intent.reason,
+            actor: intent.actor,
+            command_id: intent.command_id,
+            pin_active: crate::interceptor::driver_pin_active(),
+            duration_ms,
+            ..Default::default()
+        };
+        lifecycle::emit("interceptor_state", &event);
+        self.lifecycle_interceptor_state = to;
+        self.lifecycle_interceptor_state_at = now;
+    }
+
+    /// Record a refused/failed start attempt (P0-1; logging only).
+    ///
+    /// The state is not advanced: a failed start leaves capture where it was,
+    /// and the following `windivert_open` failure record carries the driver code.
+    fn note_interceptor_failure(&mut self) {
+        let intent = lifecycle::current_intent();
+        let event = lifecycle::InterceptorState {
+            from: self.lifecycle_interceptor_state.to_string(),
+            to: "start_failed".to_string(),
+            reason: intent.reason,
+            actor: intent.actor,
+            command_id: intent.command_id,
+            pin_active: crate::interceptor::driver_pin_active(),
+            attempt: Some(1),
+            max_attempts: Some(1),
+            ..Default::default()
+        };
+        lifecycle::emit("interceptor_state", &event);
+    }
+
+    /// Latch a typed capture-plane fault (P0-3 / `FAULT_LATCHED`).
+    ///
+    /// The record carries the failing step and the handle-layer close→open age
+    /// from the interceptor helper: the field trace's Stop at 06:49:38.561 and
+    /// its first failing open at 06:49:39.841 are that age, and it is the one
+    /// context a reviewer needs to tell a fast restart from an external holder.
+    /// Only a successful start at a newer epoch clears the fault
+    /// ([`Self::clear_capture_fault`]); a failed start never produces a
+    /// self-clearing generic error that outlives it.
+    fn note_capture_fault(&mut self, kind: &str, detail: &str) {
+        let close_age_ms = crate::interceptor::ms_since_last_close();
+        let record = if let Ok(mut s) = self.status.write() {
+            let record = s.errors.record(
+                ErrorSource::Capture,
+                AppErrorKind::Capture,
+                Some(format!("{kind}: {detail}")),
+                ErrorClearRule::Latched,
+                true,
+            );
+            s.capture_fault = Some(CaptureFault {
+                kind: kind.to_string(),
+                detail: detail.to_string(),
+                epoch: record.epoch,
+                close_age_ms,
+            });
+            Some(record)
+        } else {
+            None
+        };
+        if let Some(record) = record {
+            lifecycle::emit(
+                "ui_error",
+                &lifecycle::UiError {
+                    op: lifecycle::UiErrorOp::Show,
+                    source: Some(ErrorSource::Capture),
+                    kind: format!("{:?}", record.kind),
+                    reason_code: record.detail.clone(),
+                    age_ms: close_age_ms,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    /// A successful start at a newer epoch clears the latched capture fault
+    /// (the same-source healthy result of invariant I6), and records the
+    /// `ui_error clear` the settlement asks for.
+    fn clear_capture_fault(&mut self) {
+        let cleared = if let Ok(mut s) = self.status.write() {
+            s.capture_fault = None;
+            s.errors.recovered(ErrorSource::Capture)
+        } else {
+            None
+        };
+        if let Some(record) = cleared {
+            lifecycle::emit(
+                "ui_error",
+                &lifecycle::UiError {
+                    op: lifecycle::UiErrorOp::Clear,
+                    source: Some(ErrorSource::Capture),
+                    kind: format!("{:?}", record.kind),
+                    cleared_by: Some("capture_start".to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    /// Close the registration ledger's active session without a failure
+    /// record (Stop/Quit/replaced), emitting the P0-1 close event (D4 item 2).
+    fn note_registration_closed(&mut self, reason: SessionCloseReason) {
+        let relay = read_or_recover(&self.status).proxy_addr.clone();
+        let closed = if let Ok(mut s) = self.status.write() {
+            s.registration.note_closed(reason)
+        } else {
+            None
+        };
+        if let Some(session) = closed {
+            lifecycle::emit(
+                "control_registration",
+                &lifecycle::ControlRegistration {
+                    attempt: 1,
+                    outcome: RegistrationOutcome::Ok,
+                    session: Some(session),
+                    relay: (!relay.is_empty()).then_some(relay),
+                    reason: "close".to_string(),
+                    close_reason: Some(reason),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
     /// Stop the OOP interceptor (if running), waiting a bounded time for the
     /// platform owner threads to release their handles.
     ///
@@ -2000,6 +2359,9 @@ impl LightSpeedEngine {
         // would flip a switch on a session that no longer exists.
         self.stop_hold_watch();
         self.stop_supervised();
+        // The registration this run owned closes with it; a Stop is not a
+        // registration failure (P0-3).
+        self.note_registration_closed(SessionCloseReason::ClientQuit);
         let had_handle = self.interceptor_handle.is_some();
         let mut stopped = true;
         if let Some(mut h) = self.interceptor_handle.take() {
@@ -2023,6 +2385,12 @@ impl LightSpeedEngine {
                 s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
         }
+        if !stopped {
+            self.note_capture_fault("teardown_incomplete", TEARDOWN_INCOMPLETE_STATUS);
+        }
+        if had_handle {
+            self.note_interceptor_state("idle");
+        }
         stopped && !self.interceptor_teardown_incomplete
     }
 
@@ -2043,6 +2411,7 @@ impl LightSpeedEngine {
                 s.interceptor_active = false;
                 s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
+            self.note_capture_fault("teardown_incomplete", TEARDOWN_INCOMPLETE_STATUS);
             return false;
         }
         let Some(mut handle) = self.interceptor_handle.take() else {
@@ -2061,6 +2430,10 @@ impl LightSpeedEngine {
                 s.interceptor_error = Some(TEARDOWN_INCOMPLETE_STATUS.to_string());
             }
         }
+        if !stopped {
+            self.note_capture_fault("teardown_incomplete", TEARDOWN_INCOMPLETE_STATUS);
+        }
+        self.note_interceptor_state("idle");
         stopped
     }
 
@@ -2100,6 +2473,22 @@ impl LightSpeedEngine {
         self.stop_redirect();
         self.disconnect();
         self.release_driver_pin();
+        if !self.lifecycle_shutdown_emitted {
+            let intent = lifecycle::current_intent();
+            let reason = match intent.reason {
+                InterceptReason::Update => ShutdownReason::Update,
+                InterceptReason::ElevationHandoff => ShutdownReason::ElevationHandoff,
+                InterceptReason::Quit => ShutdownReason::Quit,
+                _ => ShutdownReason::Quit,
+            };
+            lifecycle::shutdown(lifecycle::Shutdown {
+                reason,
+                clean: stopped,
+                handle_ids_closed: String::new(),
+                pin_released: !crate::interceptor::driver_pin_active(),
+            });
+            self.lifecycle_shutdown_emitted = true;
+        }
         if stopped {
             Ok(())
         } else {
@@ -2117,6 +2506,10 @@ impl LightSpeedEngine {
 
     /// Snapshot of current engine state, including live stats from all modes.
     pub fn snapshot(&self) -> EngineStatus {
+        // P0-3: a replacement registration that nobody awaited still has a
+        // writer — the authoritative supervisor registry is reconciled here
+        // before the snapshot is handed out (invariant I5).
+        reconcile_registration(&self.status);
         let mut snap = read_or_recover(&self.status).clone();
 
         // Overlay live redirect counters from atomics (avoids lock contention).
@@ -2205,6 +2598,24 @@ impl LightSpeedEngine {
             snap.interceptor_active = handle.is_active();
         }
 
+        // P0-3 / invariant I7: a fatal receive fault is latched on the
+        // interceptor counters; project it as the typed capture fault so it —
+        // and only it — can claim the ERROR word while a run is live.
+        if snap.capture_fault.is_none() {
+            if let Some(detail) = snap.interceptor_error.clone() {
+                snap.capture_fault = Some(CaptureFault {
+                    kind: "receive_failed".to_string(),
+                    detail,
+                    epoch: snap
+                        .errors
+                        .current()
+                        .map(|record| record.epoch)
+                        .unwrap_or(0),
+                    close_age_ms: crate::interceptor::ms_since_last_close(),
+                });
+            }
+        }
+
         snap
     }
 
@@ -2214,20 +2625,172 @@ impl LightSpeedEngine {
     }
 }
 
-/// Record a `register_session` outcome in `status` so the UI can show whether
-/// the control plane accepted this client and which token it issued.
-fn apply_registration_result(status: &mut EngineStatus, result: Option<u32>) {
-    match result {
-        Some(token) => {
-            status.control_registered = true;
-            status.session_token = Some(token);
-            status.registration_error = None;
+/// The shipped registration-failure sentence (kept byte-identical: the GUI's
+/// stale-card matcher and the CLI's copy both name it).
+const REGISTRATION_FAILED: &str = "control-plane registration failed";
+
+/// Publish one registration result through the generation guard (P0-3 / D4).
+///
+/// Only the current generation may write the projection fields the GUI and CLI
+/// read; a retired generation's result is counted as superseded and writes
+/// nothing (`invariants I5/I13`). `project_failure` is false for the in-session
+/// relay switch, where a failed candidate must not paint the live session.
+fn publish_registration(
+    status: &mut EngineStatus,
+    attempt: &RegistrationAttempt,
+    project_failure: bool,
+    reason: &str,
+) -> RegistrationApplied {
+    // A candidate that failed on another relay is a ledger row only: the live
+    // session keeps relaying (I4), so it must not withdraw it. A retired result
+    // and every connect-path result go through the generation guard.
+    let applied = match attempt.outcome {
+        RegistrationOutcome::Superseded | RegistrationOutcome::Ok => {
+            status.registration.apply(attempt.clone(), false)
         }
-        None => {
-            status.control_registered = false;
-            status.session_token = None;
-            status.registration_error = Some("control-plane registration failed".to_string());
+        _ if project_failure => status.registration.apply(attempt.clone(), false),
+        _ => {
+            status.registration.note_candidate(attempt.clone());
+            RegistrationApplied::Published
         }
+    };
+    match applied {
+        RegistrationApplied::Superseded => {}
+        RegistrationApplied::Published => match attempt.outcome {
+            RegistrationOutcome::Ok => {
+                status.control_registered = true;
+                status.session_token = attempt.session;
+                status.registration_error = None;
+                if let Some(record) = status.errors.recovered(ErrorSource::Registration) {
+                    lifecycle::emit(
+                        "ui_error",
+                        &lifecycle::UiError {
+                            op: lifecycle::UiErrorOp::Clear,
+                            source: Some(ErrorSource::Registration),
+                            kind: format!("{:?}", record.kind),
+                            cleared_by: Some("registration_succeeded".to_string()),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            _ => {
+                if project_failure {
+                    status.control_registered = false;
+                    status.session_token = None;
+                    status.registration_error = Some(REGISTRATION_FAILED.to_string());
+                    let replacing = status
+                        .errors
+                        .records()
+                        .iter()
+                        .any(|record| record.source == ErrorSource::Registration);
+                    status.errors.record(
+                        ErrorSource::Registration,
+                        AppErrorKind::Route,
+                        Some(REGISTRATION_FAILED.to_string()),
+                        ErrorClearRule::OnRecovery,
+                        false,
+                    );
+                    lifecycle::emit(
+                        "ui_error",
+                        &lifecycle::UiError {
+                            op: if replacing {
+                                lifecycle::UiErrorOp::Replace
+                            } else {
+                                lifecycle::UiErrorOp::Show
+                            },
+                            source: Some(ErrorSource::Registration),
+                            kind: format!("{:?}", AppErrorKind::Route),
+                            reason_code: Some(REGISTRATION_FAILED.to_string()),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        },
+    }
+    emit_registration(reason, attempt, applied);
+    applied
+}
+
+/// The P0-1 `control_registration` record for one published/discarded result.
+///
+/// P0-3 extends the P0-1 `connect`/`relay_switch` record with the generation,
+/// `prev_session`, `superseded` and `close_reason` the settlement requires; it
+/// is the same event/schema, not a second one.
+fn emit_registration(reason: &str, attempt: &RegistrationAttempt, applied: RegistrationApplied) {
+    lifecycle::emit(
+        "control_registration",
+        &lifecycle::ControlRegistration {
+            attempt: 1,
+            outcome: attempt.outcome,
+            session: attempt.session,
+            relay: attempt.relay.clone(),
+            reason: reason.to_string(),
+            superseded: applied == RegistrationApplied::Superseded,
+            close_reason: attempt.close_reason,
+            generation: Some(attempt.generation),
+            ..Default::default()
+        },
+    );
+}
+
+/// Reconcile the stored registration state with the authoritative supervisor
+/// registry (P0-3 / invariant I5).
+///
+/// The destination-report re-registration replaces the supervisor without
+/// anybody awaiting the replacement, so its success would otherwise have no
+/// writer and the retired generation's failure would stay on screen (the
+/// 2026-11-23 stale card). Called before a snapshot is taken; writes only when
+/// the supervisor reports a generation the status has not accepted yet.
+fn reconcile_registration(status: &Arc<RwLock<EngineStatus>>) {
+    let relay = match read_or_recover(status).proxy_addr.parse::<SocketAddrV4>() {
+        Ok(relay) => relay,
+        Err(_) => return,
+    };
+    let Some((generation, token)) = crate::quic::supervised_registration(relay) else {
+        return;
+    };
+    {
+        let current = read_or_recover(status);
+        if current.registration.registered
+            && current.registration.session == Some(token)
+            && current.registration.generation >= generation
+        {
+            return;
+        }
+    }
+    let mut written = false;
+    let mut cleared = None;
+    if let Ok(mut s) = status.write() {
+        if s.registration
+            .note_healthy(generation, token, Some(relay.to_string()))
+        {
+            s.control_registered = true;
+            s.session_token = Some(token);
+            s.registration_error = None;
+            cleared = s.errors.recovered(ErrorSource::Registration);
+            written = true;
+        }
+    }
+    if let Some(record) = cleared {
+        lifecycle::emit(
+            "ui_error",
+            &lifecycle::UiError {
+                op: lifecycle::UiErrorOp::Clear,
+                source: Some(ErrorSource::Registration),
+                kind: format!("{:?}", record.kind),
+                cleared_by: Some("registration_succeeded".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    if written {
+        emit_registration(
+            "destination_report",
+            &RegistrationAttempt::ok(generation, token, relay.to_string()),
+            RegistrationApplied::Published,
+        );
     }
 }
 
@@ -2365,10 +2928,13 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        apply_registration_result, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
+        publish_registration, wait_for_redirect_ack, AdaptivePolicy, EngineStatus,
         InterceptorFacts, InterceptorPlan, InterceptorRequest, LightSpeedEngine, RedirectOptions,
-        DEFAULT_CONTROL_PORT,
+        RegistrationApplied, RegistrationAttempt, RegistrationOutcome, ALREADY_INTERCEPTING,
+        DEFAULT_CONTROL_PORT, REGISTRATION_FAILED,
     };
+    use crate::app::dto::{ErrorClearRule, ErrorSource};
+    use crate::app::lifecycle::SessionCloseReason;
     use crate::interceptor::{
         mock::MockInterceptor, InterceptorConfig, ProcessTarget, TrafficInterceptor, TransportProto,
     };
@@ -2380,6 +2946,93 @@ mod tests {
             .build()
             .expect("tokio runtime for engine test");
         LightSpeedEngine::new(rt.handle().clone())
+    }
+
+    /// A mock interceptor handle, to exercise transition recording without a
+    /// driver (the real WinDivert path must never open in a test).
+    fn mock_interceptor_handle() -> crate::interceptor::InterceptorHandle {
+        MockInterceptor::new()
+            .start(InterceptorConfig {
+                game_name: "TestGame".into(),
+                dynamic_server: false,
+                transport: TransportProto::Udp,
+                capture_tcp_ports: None,
+                process_names: vec!["TestGame.exe".to_string()],
+                process_target: Some(ProcessTarget::by_name("TestGame.exe")),
+                port_range: (27015, 27017),
+                path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+                initial_routes: Vec::new(),
+                proxy_addr: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4434),
+                start_held: false,
+                fec_enabled: false,
+                fec_k: 4,
+                adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig::default(),
+                bypass: Default::default(),
+            })
+            .expect("mock interceptor starts")
+    }
+
+    /// P0-1: the lifecycle sink observes the capture-plane transitions, the
+    /// command error card and the one process shutdown record. Behaviour is not
+    /// asserted here - only that the instrumentation is wired and typed.
+    #[test]
+    fn lifecycle_records_transitions_command_errors_and_one_shutdown() {
+        let dir = std::env::temp_dir().join(format!(
+            "lightspeed-engine-lifecycle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Isolated sink for this thread, so a parallel test's events cannot
+        // satisfy (or break) these assertions.
+        let _sink = crate::app::lifecycle::install_test_sink(dir.clone());
+
+        let mut engine = test_engine();
+        // An active capture as the start path leaves it.
+        engine.interceptor_handle = Some(mock_interceptor_handle());
+        engine.note_interceptor_state("boosting");
+        // A refused start is recorded without advancing the state.
+        engine.note_interceptor_failure();
+        // A real teardown records boosting -> idle.
+        assert!(engine.stop_interceptor(), "the mock teardown completes");
+        // A failed command records the visible error card.
+        let mut session = crate::app::dto::SessionCommandState::default();
+        let _ = crate::app::commands::record_command_result::<()>(
+            &mut session,
+            crate::app::dto::SessionCommand::StartBoost,
+            Err("opaque failure".to_string()),
+        );
+        // Shutdown is recorded exactly once even though Drop calls it again.
+        assert!(!engine.lifecycle_shutdown_emitted);
+        let _ = engine.shutdown();
+        assert!(engine.lifecycle_shutdown_emitted);
+        let _ = engine.shutdown();
+        assert!(engine.lifecycle_shutdown_emitted);
+
+        let text = std::fs::read_to_string(dir.join(crate::app::lifecycle::LIFECYCLE_FILE))
+            .expect("the lifecycle sink exists");
+        assert_eq!(
+            text.matches("\"event\":\"interceptor_state\"").count(),
+            3,
+            "boosting, start_failed and idle are the three transitions: {text}"
+        );
+        assert!(text.contains("\"to\":\"start_failed\""), "{text}");
+        assert!(text.contains("\"to\":\"boosting\""), "{text}");
+        assert!(text.contains("\"to\":\"idle\""), "{text}");
+        assert_eq!(
+            text.matches("\"event\":\"ui_error\"").count(),
+            1,
+            "one failed command shows one card: {text}"
+        );
+        assert!(text.contains("\"op\":\"show\""), "{text}");
+        assert_eq!(
+            text.matches("\"event\":\"shutdown\"").count(),
+            1,
+            "the process shutdown record must be written once: {text}"
+        );
     }
 
     #[test]
@@ -2458,22 +3111,245 @@ mod tests {
         assert!(wait_for_redirect_ack(None, Duration::from_millis(80)));
     }
 
+    // ── P0-3 registration state machine (roadmap D4) ──────────────────────
+
+    fn attempt_ok(generation: u64, session: u32) -> RegistrationAttempt {
+        RegistrationAttempt::ok(generation, session, "203.0.113.9:4434")
+    }
+
     #[test]
     fn engine_registration_success_records_token() {
         let mut status = EngineStatus::default();
-        apply_registration_result(&mut status, Some(0xdead_beef));
+        let applied =
+            publish_registration(&mut status, &attempt_ok(1, 0xdead_beef), true, "connect");
+        assert_eq!(applied, RegistrationApplied::Published);
         assert!(status.control_registered);
         assert_eq!(status.session_token, Some(0xdead_beef));
         assert_eq!(status.registration_error, None);
+        assert_eq!(status.registration.session, Some(0xdead_beef));
+        assert!(
+            status.registration.active_record().is_some(),
+            "the session in status is resolvable in the ledger"
+        );
+        assert!(status.errors.is_empty());
     }
 
     #[test]
     fn engine_registration_failure_records_error() {
         let mut status = EngineStatus::default();
-        apply_registration_result(&mut status, None);
+        let failure = RegistrationAttempt::failed(1, "203.0.113.9:4434");
+        let applied = publish_registration(&mut status, &failure, true, "connect");
+        assert_eq!(applied, RegistrationApplied::Published);
         assert!(!status.control_registered);
         assert_eq!(status.session_token, None);
+        assert_eq!(
+            status.registration_error.as_deref(),
+            Some(REGISTRATION_FAILED)
+        );
+        let record = status
+            .errors
+            .current()
+            .expect("the failure is a typed record");
+        assert_eq!(record.source, ErrorSource::Registration);
+        assert!(!record.latched);
+        assert_eq!(record.auto_clear, ErrorClearRule::OnRecovery);
+    }
+
+    /// **T11 (engine level)** — the retired generation's first-attempt failure is
+    /// discarded: no `registration_error`, `superseded_total` increments, and a
+    /// previously registered session survives.
+    #[test]
+    fn engine_superseded_generation_never_writes_a_failure() {
+        let mut status = EngineStatus::default();
+        publish_registration(&mut status, &attempt_ok(1, 1000), true, "connect");
+        assert!(status.control_registered);
+
+        let retired = RegistrationAttempt::superseded(
+            1,
+            "203.0.113.9:4434",
+            SessionCloseReason::SessionReplaced,
+        );
+        let applied = publish_registration(&mut status, &retired, true, "connect");
+        assert_eq!(applied, RegistrationApplied::Superseded);
+        assert!(
+            status.control_registered,
+            "a superseded result must not withdraw the live session"
+        );
+        assert_eq!(status.session_token, Some(1000));
+        assert_eq!(
+            status.registration_error, None,
+            "a retired generation is never mapped to a failure"
+        );
+        assert_eq!(status.registration.superseded_total, 1);
+        assert!(status.errors.is_empty());
+        assert!(status
+            .registration
+            .ledger
+            .last()
+            .is_some_and(|row| row.superseded));
+    }
+
+    /// **T10 (engine level)** — a stale registration error clears when a newer
+    /// generation succeeds, and a stale result cannot repaint it.
+    #[test]
+    fn engine_stale_registration_error_clears_when_a_newer_generation_succeeds() {
+        let mut status = EngineStatus::default();
+        publish_registration(
+            &mut status,
+            &RegistrationAttempt::failed(1, "203.0.113.9:4434"),
+            true,
+            "connect",
+        );
         assert!(status.registration_error.is_some());
+
+        // The destination-report replacement succeeds (the snapshot path).
+        assert!(status
+            .registration
+            .note_healthy(2, 2000, Some("203.0.113.9:4434".to_string())));
+        status.control_registered = true;
+        status.session_token = Some(2000);
+        status.registration_error = None;
+        status.errors.recovered(ErrorSource::Registration);
+        assert!(
+            status.errors.is_empty(),
+            "the newer success clears the error"
+        );
+
+        // The retired generation's failure arrives late; it must not repaint it.
+        let applied = publish_registration(
+            &mut status,
+            &RegistrationAttempt::failed(1, "203.0.113.9:4434"),
+            true,
+            "connect",
+        );
+        assert_eq!(applied, RegistrationApplied::Superseded);
+        assert_eq!(status.registration_error, None);
+        assert!(status.errors.is_empty());
+        assert_eq!(status.session_token, Some(2000));
+    }
+
+    #[test]
+    fn a_failed_relay_switch_does_not_paint_the_live_session() {
+        let mut status = EngineStatus::default();
+        publish_registration(&mut status, &attempt_ok(1, 1000), true, "connect");
+        let applied = publish_registration(
+            &mut status,
+            &RegistrationAttempt::failed(2, "203.0.113.10:4434"),
+            false,
+            "relay_switch",
+        );
+        assert_eq!(applied, RegistrationApplied::Published);
+        assert!(
+            status.registration_error.is_none(),
+            "a failed switch candidate is a ledger row, not the session's error"
+        );
+        assert!(
+            status.control_registered,
+            "the live session keeps relaying on the old relay (I4)"
+        );
+        assert_eq!(status.session_token, Some(1000));
+        assert_eq!(
+            status.registration.session,
+            Some(1000),
+            "the ledger still owns the live session"
+        );
+        assert_eq!(
+            status
+                .registration
+                .active_record()
+                .and_then(|record| record.session),
+            Some(1000),
+            "and the session in status is resolvable to its record"
+        );
+        assert_eq!(
+            status
+                .registration
+                .ledger
+                .last()
+                .map(|record| record.outcome),
+            Some(RegistrationOutcome::Fail),
+            "the candidate failure is on record"
+        );
+    }
+
+    #[test]
+    fn a_closed_registration_is_not_a_failure() {
+        let mut status = EngineStatus::default();
+        publish_registration(&mut status, &attempt_ok(1, 1000), true, "connect");
+        assert_eq!(
+            status
+                .registration
+                .note_closed(SessionCloseReason::ClientQuit),
+            Some(1000)
+        );
+        assert!(!status.registration.registered);
+        assert_eq!(
+            status.registration.close_reason,
+            Some(SessionCloseReason::ClientQuit)
+        );
+        assert!(status.registration_error.is_none());
+    }
+
+    // ── P0-3 capture fault latch (FAULT_LATCHED) ───────────────────────────
+
+    #[test]
+    fn a_failed_start_latches_a_typed_capture_fault_with_close_age() {
+        let (rt, mut engine, log) = engine_with_recording_pin(false);
+        let _runtime = rt;
+        // The close-age is read from the one handle-layer anchor. Sample it
+        // around the start: on a build without the WinDivert handle layer both
+        // reads are `None`; on Windows the carried value must sit between them.
+        let age_before = crate::interceptor::ms_since_last_close();
+        let error = engine
+            .start_interceptor_plan(logging_plan(&log, true))
+            .expect_err("the mock backend refuses the start");
+        let age_after = crate::interceptor::ms_since_last_close();
+        let status = engine.snapshot();
+        let fault = status
+            .capture_fault
+            .as_ref()
+            .expect("a failed capture start latches the typed fault");
+        assert_eq!(fault.kind, "windivert_open");
+        assert!(fault.detail.contains(&error));
+        match (fault.close_age_ms, age_before, age_after) {
+            (Some(carried), Some(before), Some(after)) => assert!(
+                carried >= before && carried <= after,
+                "the record carries the handle-layer close age (got {carried}, window {before}..={after})"
+            ),
+            (None, None, None) => {}
+            other => panic!("close-age carry disagrees with the interceptor helper: {other:?}"),
+        }
+        assert!(fault.epoch > 0);
+        let record = status
+            .errors
+            .current()
+            .expect("the fault is a typed error record");
+        assert!(
+            record.latched,
+            "only a latched capture fault may mask a run"
+        );
+        assert_eq!(record.source, ErrorSource::Capture);
+        assert_eq!(record.auto_clear, ErrorClearRule::Latched);
+        assert_eq!(record.epoch, fault.epoch);
+    }
+
+    #[test]
+    fn a_successful_start_clears_the_latched_capture_fault() {
+        let (rt, mut engine, log) = engine_with_recording_pin(false);
+        let _runtime = rt;
+        let _ = engine.start_interceptor_plan(logging_plan(&log, true));
+        assert!(engine.snapshot().capture_fault.is_some());
+
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("the healthy start succeeds");
+        let status = engine.snapshot();
+        assert!(
+            status.capture_fault.is_none(),
+            "the same-source healthy result clears the latched fault"
+        );
+        assert!(status.errors.is_empty(), "and clears its typed record");
+        engine.stop_boost().expect("a mock stop is clean");
     }
 
     #[test]
@@ -2520,6 +3396,7 @@ mod tests {
             path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: Vec::new(),
             proxy_addr: std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
+            start_held: false,
             fec_enabled: false,
             fec_k: 0,
             adaptive_fec: Default::default(),
@@ -2582,6 +3459,7 @@ mod tests {
                     std::net::Ipv4Addr::new(127, 0, 0, 1),
                     4434,
                 ),
+                start_held: false,
                 fec_enabled: false,
                 fec_k: 4,
                 adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig::default(),
@@ -2618,6 +3496,7 @@ mod tests {
                     std::net::Ipv4Addr::new(127, 0, 0, 1),
                     4434,
                 ),
+                start_held: false,
                 fec_enabled: false,
                 fec_k: 4,
                 // The client default is adaptive FEC on; the interceptor config mirrors it.
@@ -2665,6 +3544,7 @@ mod tests {
                     std::net::Ipv4Addr::new(127, 0, 0, 1),
                     4434,
                 ),
+                start_held: false,
                 fec_enabled: false,
                 fec_k: 4,
                 adaptive_fec: crate::tunnel::adaptive::AdaptiveConfig::default(),
@@ -2951,8 +3831,11 @@ mod tests {
             if self.fail {
                 anyhow::bail!("mock start refused");
             }
+            // Mirror the real backend's hold: a held config returns a gate that
+            // is already closed (P0-4 / T12).
+            let held = config.start_held;
             let mut handle = MockInterceptor::new().start(config)?;
-            handle.attach_tunnelling_switch(Arc::new(std::sync::atomic::AtomicBool::new(true)));
+            handle.attach_tunnelling_switch(Arc::new(std::sync::atomic::AtomicBool::new(!held)));
             Ok(handle)
         }
     }
@@ -3001,6 +3884,7 @@ mod tests {
                 path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: Vec::new(),
                 proxy_addr: relay,
+                start_held: false,
                 fec_enabled: false,
                 fec_k: 4,
                 adaptive_fec: Default::default(),
@@ -3220,5 +4104,189 @@ mod tests {
         assert!(engine.is_intercepting());
         assert_eq!(log_of(&log), vec!["pin", "start", "start"]);
         engine.stop_boost().expect("clean stop");
+    }
+
+    // ── P0-4 start/stop semantics and the start-of-run hold (T12) ─────────
+
+    /// A start over a **healthy** run is refused and leaves that run untouched.
+    ///
+    /// Failing-before for the implicit pre-stop: the old
+    /// `start_interceptor_request` unconditionally called `stop_supervised()` +
+    /// `stop_interceptor()` before validating the request, so this call stopped
+    /// the live mock and opened a second one. The fix refuses with the typed
+    /// [`ALREADY_INTERCEPTING`] error and performs no teardown at all.
+    #[test]
+    fn a_start_over_a_healthy_run_is_refused_and_does_not_tear_it_down() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("first start");
+        assert!(engine.is_intercepting(), "the fixture must be a live run");
+        // Hold our own reference so the pointer comparison below cannot be
+        // satisfied by an allocator recycling the address of a freed handle.
+        let counters_before = Arc::clone(
+            &engine
+                .interceptor_handle
+                .as_ref()
+                .expect("live handle")
+                .counters,
+        );
+
+        let error = engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect_err("a start over a healthy run must be refused");
+        assert_eq!(
+            error, ALREADY_INTERCEPTING,
+            "the refusal must be the typed message a front end can show"
+        );
+        let counters_after = Arc::clone(
+            &engine
+                .interceptor_handle
+                .as_ref()
+                .expect("the live handle must survive the refusal")
+                .counters,
+        );
+        assert!(
+            Arc::ptr_eq(&counters_before, &counters_after),
+            "the refused start must keep the SAME handle: no teardown, no reopen"
+        );
+        assert!(
+            engine.is_intercepting(),
+            "the refused start must leave the run live"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start"],
+            "the refused start must not open a pin or a second backend"
+        );
+
+        // The shipped one-shot request path refuses before it even plans, so the
+        // refusal is not masked by a request whose game cannot be resolved.
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1);
+        let error = engine
+            .start_interceptor_request(InterceptorRequest::new("not-a-game", relay, false, 4))
+            .expect_err("the one-shot start must refuse a healthy run too");
+        assert_eq!(error, ALREADY_INTERCEPTING);
+        assert!(engine.is_intercepting());
+
+        engine.stop_boost().expect("clean stop");
+    }
+
+    /// The explicit restart is the one start that replaces a healthy run.
+    #[test]
+    fn an_explicit_restart_replaces_a_healthy_run() {
+        let (_rt, mut engine, log) = engine_with_recording_pin(false);
+        engine
+            .start_interceptor_plan(logging_plan(&log, false))
+            .expect("first start");
+        // Hold our own reference so a recycled allocation cannot fake a "new"
+        // handle below (the old and new counters must be distinct objects).
+        let counters_before = Arc::clone(
+            &engine
+                .interceptor_handle
+                .as_ref()
+                .expect("live handle")
+                .counters,
+        );
+
+        engine
+            .restart_interceptor_plan(logging_plan(&log, false))
+            .expect("an explicit restart may replace a healthy run");
+        let counters_after = Arc::clone(
+            &engine
+                .interceptor_handle
+                .as_ref()
+                .expect("a new live handle")
+                .counters,
+        );
+        assert!(
+            !Arc::ptr_eq(&counters_before, &counters_after),
+            "the restart must close the old run and open a new one"
+        );
+        assert_eq!(
+            log_of(&log),
+            vec!["pin", "start", "start"],
+            "the restart reuses the pin and starts exactly one new backend run"
+        );
+        engine.stop_boost().expect("clean stop");
+    }
+
+    /// T12 (invariant I3): a `hold_on_start` plan is held from the instant
+    /// `start_interceptor_plan` returns, before any packet can tunnel.
+    ///
+    /// The plan is produced by the real `plan_interceptor` (so the
+    /// `InterceptorRequest::hold_on_start` → `InterceptorConfig::start_held`
+    /// wiring is under test), then only the platform backend is swapped for the
+    /// in-memory one: this test must never open a real driver handle.
+    #[test]
+    fn a_hold_on_start_plan_reports_tunnelling_withheld_before_the_first_packet() {
+        let (_rt, mut engine, _log) = engine_with_recording_pin(false);
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 28015);
+        let request = InterceptorRequest::new("cs2", relay, false, 4)
+            .with_server_override(Some(server))
+            .with_hold_on_start(true);
+        let mut plan = engine
+            .plan_interceptor(request)
+            .expect("a known server plans without a running game");
+        assert!(
+            plan.config.start_held,
+            "plan_interceptor must carry hold_on_start into the config the backend receives"
+        );
+        plan.interceptor = Box::new(MockInterceptor::new());
+        // The plan's availability is a platform report; the mock replaced the
+        // platform backend for this test, so the start path must not refuse on
+        // the host's missing WinDivert files (kernel/driver must not be touched).
+        plan.facts.available = Ok(());
+
+        engine
+            .start_interceptor_plan(plan)
+            .expect("the held plan starts");
+        let handle = engine.interceptor_handle.as_ref().expect("live handle");
+        assert_eq!(
+            handle.tunnelling_enabled(),
+            Some(false),
+            "the hold must already be installed when start_interceptor_plan returns: \
+             a packet arriving now cannot be tunnelled"
+        );
+        assert_eq!(
+            engine.snapshot().tunnelling_enabled,
+            Some(false),
+            "the status must say the run is held, not that it is idle-looking"
+        );
+        assert_eq!(
+            engine.snapshot().interceptor_tunnel_sent,
+            0,
+            "nothing may have tunnelled while held"
+        );
+
+        assert!(engine.release_tunnelling(), "the mock gate must release");
+        assert_eq!(
+            engine
+                .interceptor_handle
+                .as_ref()
+                .expect("live handle")
+                .tunnelling_enabled(),
+            Some(true),
+            "release_tunnelling must open the gate the start already installed"
+        );
+        engine.stop_boost().expect("clean stop");
+    }
+
+    /// An unheld plan keeps the shipped default: no hold, no gate.
+    #[test]
+    fn a_plan_without_hold_on_start_keeps_the_shipped_unheld_default() {
+        let engine = test_engine();
+        let relay = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4434);
+        let server = SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 28015);
+        let request =
+            InterceptorRequest::new("cs2", relay, false, 4).with_server_override(Some(server));
+        let plan = engine
+            .plan_interceptor(request)
+            .expect("a known server plans without a running game");
+        assert!(
+            !plan.config.start_held,
+            "a caller that did not ask for the hold must start unheld"
+        );
     }
 }

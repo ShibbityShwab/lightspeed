@@ -31,6 +31,7 @@ use a11y::{automation, AccessKitResponse};
 use eframe::egui;
 use lightspeed_client::app::commands::AppCore;
 use lightspeed_client::app::dto as app_dto;
+use lightspeed_client::app::lifecycle;
 use lightspeed_client::app::status::stale_hold_due;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
@@ -63,7 +64,7 @@ use ledger::*;
 use picker::*;
 use presence::*;
 use relay_choice::*;
-use route_surface::{Line, RouteSurface, RouteWord, Row, RowValue, Tone};
+use route_surface::{Line, RouteSurface, RouteWord, Row, RowValue, Tone, WordTracker};
 use theme::*;
 use watchdog::*;
 use widgets::*;
@@ -299,6 +300,18 @@ pub struct LightSpeedApp<P: Platform> {
     /// the watcher does not restart the tunnel on every tick.
     auto_started_for_presence: bool,
 
+    /// P0-1: the last word the shell rendered, so `ui.word` is emitted only on a
+    /// change. Pure comparison; nothing reads it back into behaviour.
+    ui_word: WordTracker,
+    /// P0-1: the render-side error-card lifecycle behind `ui_error`/`ui_state`.
+    error_card: CardTracker,
+    /// P0-1: whether the presence scan was enabled on the previous frame, so
+    /// leaving Auto is recorded once as `disabled`/`manual_pick`.
+    presence_scan_active: bool,
+    /// P0-1: whether the previous finished scan failed, so a persistent scan
+    /// failure is recorded once per streak instead of every 5 s.
+    presence_scan_failed: bool,
+
     /// A client-leg measurement in flight for every relay.
     relay_measurement: Option<Receiver<RelayLegs>>,
     /// When the periodic auto-select re-race last started; cleared while
@@ -439,6 +452,28 @@ fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The capture-plane intent an exit flow sets before it hands the process away
+/// (P0-1, behaviour-neutral: a label read by the lifecycle records only).
+///
+/// Pure and total over the reasons the GUI raises; anything else is stamped
+/// `internal` with a `shutdown` command id, so a record is never mislabelled as
+/// a user action it did not come from.
+fn exit_intent(reason: lifecycle::InterceptReason) -> lifecycle::Intent {
+    let (actor, command_id) = match reason {
+        lifecycle::InterceptReason::Quit => (lifecycle::Actor::User, "quit"),
+        lifecycle::InterceptReason::ElevationHandoff => {
+            (lifecycle::Actor::System, "elevation_handoff")
+        }
+        lifecycle::InterceptReason::Update => (lifecycle::Actor::User, "update"),
+        _ => (lifecycle::Actor::Internal, "shutdown"),
+    };
+    lifecycle::Intent {
+        reason,
+        actor,
+        command_id: command_id.to_string(),
+    }
+}
+
 /// The capture-only forced route state (`LIGHTSPEED_CAPTURE_STATE=connected|optimizing|starved|error`).
 ///
 /// Direction C's review captures need the CONNECTED / OPTIMIZING / STARVED /
@@ -530,11 +565,137 @@ fn spawn_rtt_probe(addr: SocketAddrV4) -> Receiver<Option<u64>> {
     rx
 }
 
+// ── P0-1: render-side error-card observation (ui_error / ui_state) ─────────
+//
+// The error panel is painted exactly when the route word is `Error`. These
+// types compare what the panel showed on the previous frame with what it shows
+// now; `observe_presentation` turns that difference into a `lifecycle` record.
+// They are pure state - no logging, no behaviour - so the show/clear/replace
+// rule and the visible age are unit-tested without a window (see
+// `p0_1_render_observation_tests`).
+
+/// The identity of the error card shown this frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CardFacts {
+    /// The error taxonomy kind, when the app can name one. `None` only for the
+    /// debug-only capture fixture, which paints an error the engine never made.
+    kind: Option<app_dto::AppErrorKind>,
+    /// The catalogue key of the sentence the card renders under its tag.
+    detail_key: &'static str,
+    /// The verbatim engine detail behind the disclosure.
+    detail: Option<String>,
+    /// The subsystem the card is attributed to.
+    source: Option<lifecycle::ErrorSource>,
+}
+
+/// What happened to the visible card between two frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardChange {
+    Show,
+    Clear,
+    Replace,
+}
+
+/// One observed card transition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CardObservation {
+    change: CardChange,
+    /// The card that was up before this frame (clear/replace).
+    previous: Option<CardFacts>,
+    /// The card on screen this frame (show/replace).
+    current: Option<CardFacts>,
+    /// How long the previous card was visible, in ms (0 for a show).
+    age_ms: u64,
+}
+
+/// The render-side error-card lifecycle (P0-1).
+#[derive(Debug, Default)]
+struct CardTracker {
+    shown: Option<ShownCard>,
+}
+
+#[derive(Debug)]
+struct ShownCard {
+    facts: CardFacts,
+    shown_at: std::time::Instant,
+}
+
+impl CardTracker {
+    /// Observe the card this frame. `Some` only when it appeared, cleared or
+    /// was replaced by a different error - never on an unchanged frame.
+    fn observe(
+        &mut self,
+        current: Option<CardFacts>,
+        now: std::time::Instant,
+    ) -> Option<CardObservation> {
+        let change = card_change(
+            self.shown.as_ref().map(|card| &card.facts),
+            current.as_ref(),
+        )?;
+        let previous = self.shown.as_ref().map(|card| card.facts.clone());
+        let age_ms = match (&self.shown, change) {
+            (Some(card), CardChange::Clear | CardChange::Replace) => {
+                now.saturating_duration_since(card.shown_at).as_millis() as u64
+            }
+            _ => 0,
+        };
+        match change {
+            CardChange::Clear => {
+                self.shown = None;
+                Some(CardObservation {
+                    change,
+                    previous,
+                    current: None,
+                    age_ms,
+                })
+            }
+            CardChange::Show | CardChange::Replace => {
+                let facts = current?;
+                self.shown = Some(ShownCard {
+                    facts: facts.clone(),
+                    shown_at: now,
+                });
+                Some(CardObservation {
+                    change,
+                    previous,
+                    current: Some(facts),
+                    age_ms,
+                })
+            }
+        }
+    }
+}
+
+/// The pure card transition rule: appearance, disappearance, or a different
+/// error replacing the visible one. Same card twice is not a transition.
+fn card_change(shown: Option<&CardFacts>, current: Option<&CardFacts>) -> Option<CardChange> {
+    match (shown, current) {
+        (None, None) => None,
+        (None, Some(_)) => Some(CardChange::Show),
+        (Some(_), None) => Some(CardChange::Clear),
+        (Some(previous), Some(current)) if previous != current => Some(CardChange::Replace),
+        (Some(_), Some(_)) => None,
+    }
+}
+
 impl<P: Platform> LightSpeedApp<P> {
     /// Build the app the way `main.rs` runs it: real tray, saved config,
     /// background discovery/presence/watchdog, and an immediate reconnect to
     /// the persisted relay.
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
+        // P0-1 lifecycle identity: open `lifecycle.jsonl` in the data directory
+        // and emit the one `app_start` record, before the first frame. `init` is
+        // idempotent, and a sink that cannot be written makes every later record
+        // a no-op, so this cannot change what the app does.
+        if let Some(facts) = lifecycle::init(lifecycle::LifecycleConfig::new(paths::data_dir())) {
+            tracing::info!(
+                "lifecycle: app_session={} build={} prev_shutdown={}",
+                facts.app_session,
+                facts.identity.build(),
+                facts.prev_shutdown.as_str()
+            );
+        }
+
         Self::build(engine, quit, true)
     }
 
@@ -725,6 +886,10 @@ impl<P: Platform> LightSpeedApp<P> {
             },
             auto_game_present: false,
             auto_started_for_presence: false,
+            ui_word: WordTracker::default(),
+            error_card: CardTracker::default(),
+            presence_scan_active: false,
+            presence_scan_failed: false,
             last_race: None,
             winner_probe: None,
             manager_label_input: String::new(),
@@ -1685,16 +1850,30 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    fn shutdown_engine(&mut self) {
+    /// Shut the engine down for `reason`, recording that reason as the
+    /// lifecycle intent so the authoritative `shutdown` record the engine
+    /// emits names the flow instead of a bare user Stop.
+    ///
+    /// No shutdown event is emitted here: the engine/model layer owns it, with
+    /// the handle ids and pin state only it knows (P0-1).
+    fn shutdown_engine(
+        &mut self,
+        reason: lifecycle::InterceptReason,
+        source: lifecycle::ActionSource,
+    ) {
         // Stop the background watcher first and wait for it: a presence scan is
         // two process spawns, and the app must not go away while one runs.
         self.presence.shutdown();
+        lifecycle::set_intent(exit_intent(reason));
         // Quit is an explicit engine shutdown: the true Stop, then release the
         // driver pin after handle teardown. A user Stop never releases it, so a
         // Quit is the one place the pin lifecycle ends with the process.
-        if let Err(error) = self.commands.shutdown() {
+        if let Err(error) = self.commands.shutdown(source) {
             tracing::error!("engine shutdown did not complete cleanly: {error:?}");
         }
+        // The command path stamps its own stop intent while it runs; restore the
+        // exit flow's reason for any record the exit still takes after it.
+        lifecycle::set_intent(exit_intent(reason));
     }
     fn start_update_check(&mut self) {
         if matches!(self.update_check, UpdateCheckState::Checking) {
@@ -1716,7 +1895,11 @@ impl<P: Platform> LightSpeedApp<P> {
     /// A picked process is the interception target and beats every port range:
     /// the engine binds it by image name against the live process table at start
     /// time. With no target the built-in Game path decides, exactly as before.
-    fn start_boost(&mut self) {
+    ///
+    /// `source` is the T15 action source the audit records (button, auto, …);
+    /// the hold is requested *before* the start so no packet can tunnel between
+    /// the handle opening and the relay choice (P0-4 / T12).
+    fn start_boost(&mut self, source: lifecycle::ActionSource) {
         // A self-update in flight has stopped this engine and will terminate it.
         if matches!(self.update_check, UpdateCheckState::Installing) {
             return;
@@ -1733,7 +1916,9 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let game_key = self.selected_game().key;
         // The command owns the in-flight state and the Error row's source (S3b):
-        // a failure comes back typed, with the engine's verbatim detail.
+        // a failure comes back typed, with the engine's verbatim detail. The
+        // `true` is the T12 hold: the backend creates the gate CLOSED, so the
+        // old post-start `hold_tunnelling()` below is no longer the only hold.
         if let Err(error) = self.commands.start_boost(
             &game_key,
             proxy,
@@ -1741,6 +1926,8 @@ impl<P: Platform> LightSpeedApp<P> {
             4, // default FEC K
             port_range_override,
             process_target,
+            source,
+            true,
         ) {
             tracing::error!("start_interceptor failed: {error:?}");
             return;
@@ -1758,6 +1945,11 @@ impl<P: Platform> LightSpeedApp<P> {
             // The interceptor still captures and attributes while held, so
             // the destination is discovered and the hold can be released;
             // holding never makes the server unknowable.
+            //
+            // T12: the hold was requested on the start itself, so it already
+            // exists here. This call only re-asserts it (harmless) and reports
+            // whether the backend has a gate at all, which is what decides
+            // whether the release watcher is armed.
             let held = self.commands.hold_tunnelling().unwrap_or(false);
             if held {
                 self.held_since = Some(std::time::Instant::now());
@@ -1795,8 +1987,10 @@ impl<P: Platform> LightSpeedApp<P> {
     /// A Stop is a true Stop: diverting handles close and only the non-diverting
     /// driver pin stays. Clearing every per-run fact here keeps a later Optimize
     /// from inheriting the previous run's hold, relay choice or locked address.
-    fn stop_boost(&mut self) {
-        if let Err(error) = self.commands.stop_boost() {
+    ///
+    /// `source` is the T15 action source the audit records for this Stop.
+    fn stop_boost(&mut self, source: lifecycle::ActionSource) {
+        if let Err(error) = self.commands.stop_boost_from(source) {
             tracing::error!("stop command failed: {error:?}");
         }
         self.boost_start = None;
@@ -2110,7 +2304,13 @@ impl<P: Platform> LightSpeedApp<P> {
         self.elevation_notice = None;
         // The successor starts a fresh engine, and some platform backends exit
         // inside `begin_elevation`: stop the diverting data plane before it.
-        self.stop_boost();
+        // T15: the handoff is a system flow, and this Stop is its pre-stop, so
+        // it is attributed to the system rather than a user Stop.
+        self.stop_boost(lifecycle::ActionSource::System);
+        // P0-1: the successor is about to own capture; name the handoff so any
+        // record the exit takes says elevation_handoff instead of the Stop that
+        // just ran.
+        lifecycle::set_intent(exit_intent(lifecycle::InterceptReason::ElevationHandoff));
         let attempt = P::begin_elevation();
         tracing::info!("elevation handshake: {:?}", attempt.phase());
         self.elevation = Some(attempt);
@@ -2137,7 +2337,10 @@ impl<P: Platform> LightSpeedApp<P> {
             tracing::info!("elevated instance confirmed; exiting the unelevated process");
             // The elevated successor starts a fresh engine; this process must
             // not leave a diverting filter or a held pin behind on its way out.
-            self.shutdown_engine();
+            self.shutdown_engine(
+                lifecycle::InterceptReason::ElevationHandoff,
+                lifecycle::ActionSource::System,
+            );
             std::process::exit(0);
         }
         if phase != ElevationPhase::Ready {
@@ -2180,22 +2383,61 @@ impl<P: Platform> LightSpeedApp<P> {
             // Drop a result produced before the switch, so leaving Auto can
             // never be followed by an auto-start on a stale scan.
             self.presence.discard_pending();
+            // P0-1: leaving Auto is a presence transition too. Recorded once,
+            // with the reason the user gave (`manual_pick` vs a mode switch),
+            // instead of looking like a game exit in the trace. The `from` state
+            // is read before the reset below clears it.
+            let from = presence_token(self.auto_detected_game.as_deref());
             if !auto_mode {
                 self.auto_detected_game = None;
                 self.auto_game_present = false;
             }
+            if self.presence_scan_active {
+                self.presence_scan_active = false;
+                self.presence_scan_failed = false;
+                lifecycle::emit(
+                    "presence",
+                    &lifecycle::Presence {
+                        from,
+                        to: "disabled".to_string(),
+                        cause: scan_disabled_cause(
+                            self.game_manual,
+                            self.target_process.is_some(),
+                            self.game_auto,
+                        ),
+                        scan_ms: 0,
+                        latch: Some(presence_latch(self.auto_started_for_presence)),
+                    },
+                );
+            }
             return;
+        }
+        if !self.presence_scan_active {
+            self.presence_scan_active = true;
+            self.presence_scan_failed = false;
         }
 
         // The worker owns the 5 s cadence and keeps one scan in flight, so this
         // never waits; a frame without a result keeps the previous state.
-        let Some(detected) = self.presence.latest() else {
+        let Some(update) = self.presence.latest() else {
             return;
         };
+        // The applied result is exactly the one before P0-1: only a `Present`
+        // scan yields a game, so a scan failure still applies as "no game" and
+        // can never auto-start. Only the record below distinguishes it from a
+        // clean absence.
+        let detected = presence_detected(&update.scan);
         let present = detected.is_some();
         let changed = detected != self.auto_detected_game;
+        let cause = presence_cause(
+            self.auto_detected_game.as_deref(),
+            &update.scan,
+            self.presence_scan_failed,
+        );
+        let from = presence_token(self.auto_detected_game.as_deref());
         self.auto_detected_game = detected;
         self.auto_game_present = present;
+        self.presence_scan_failed = matches!(update.scan, PresenceScan::Error);
 
         if changed {
             tracing::info!(
@@ -2216,54 +2458,72 @@ impl<P: Platform> LightSpeedApp<P> {
         // the middle: it retries until the start succeeds, then holds until the
         // game actually leaves.
         if present {
-            if self.auto_started_for_presence {
-                return;
-            }
-            if self.status.interceptor_active {
-                self.auto_started_for_presence = true;
-                return;
-            }
-            // Zero clicks means the relay leg needs no press either, so the
-            // auto-start path connects when nothing is connected yet. A user
-            // who pinned a relay (`auto_select` off) has made the call already,
-            // so their pick is connected directly and never re-raced. Both
-            // happen at most once per presence: re-connecting each tick would
-            // reset the control-plane link while the race is still in flight.
-            if !self.auto_started_for_presence
-                && should_race(self.auto_select, self.status.connected, self.proxies.len())
-            {
-                tracing::info!(
-                    "Game present and no relay connected; connecting one before interception"
-                );
-                self.start_relay_race();
-                self.auto_started_for_presence = true;
-            } else if !self.auto_started_for_presence
-                && self.selected_proxy_addr().is_some()
-                && !self.status.connected
-            {
-                tracing::info!("Game present; connecting the pinned relay before interception");
-                self.connect_selected();
-                self.persist_config();
-                self.auto_started_for_presence = true;
-            }
-            if self.status.connected {
-                tracing::info!(
-                    "Game present and relay connected; starting interception for {}",
-                    self.auto_detected_game.as_deref().unwrap_or("unknown")
-                );
-                self.start_boost();
-                // Latch regardless of the result. A start that failed because the
-                // game is mid-launch would otherwise retry forever, and a start
-                // that succeeded must not repeat; either way the tunnel is now
-                // the engine's to manage until the game leaves.
-                self.auto_started_for_presence = true;
+            // A presence transition that arrives while the start is already
+            // latched changes nothing: the engine owns the tunnel until the game
+            // leaves. (It is still recorded as a `presence` event below, because
+            // the transition itself is the evidence.)
+            if !self.auto_started_for_presence {
+                if self.status.interceptor_active {
+                    self.auto_started_for_presence = true;
+                } else {
+                    // Zero clicks means the relay leg needs no press either, so
+                    // the auto-start path connects when nothing is connected
+                    // yet. A user who pinned a relay (`auto_select` off) has
+                    // made the call already, so their pick is connected directly
+                    // and never re-raced. Both happen at most once per presence:
+                    // re-connecting each tick would reset the control-plane link
+                    // while the race is still in flight.
+                    if should_race(self.auto_select, self.status.connected, self.proxies.len()) {
+                        tracing::info!(
+                            "Game present and no relay connected; connecting one before interception"
+                        );
+                        self.start_relay_race();
+                        self.auto_started_for_presence = true;
+                    } else if self.selected_proxy_addr().is_some() && !self.status.connected {
+                        tracing::info!(
+                            "Game present; connecting the pinned relay before interception"
+                        );
+                        self.connect_selected();
+                        self.persist_config();
+                        self.auto_started_for_presence = true;
+                    }
+                    if self.status.connected {
+                        tracing::info!(
+                            "Game present and relay connected; starting interception for {}",
+                            self.auto_detected_game.as_deref().unwrap_or("unknown")
+                        );
+                        self.start_boost(lifecycle::ActionSource::Auto);
+                        // Latch regardless of the result. A start that failed
+                        // because the game is mid-launch would otherwise retry
+                        // forever, and a start that succeeded must not repeat;
+                        // either way the tunnel is now the engine's to manage
+                        // until the game leaves.
+                        self.auto_started_for_presence = true;
+                    }
+                }
             }
         } else if self.status.any_data_plane_active() || self.held_since.is_some() {
             tracing::info!("Game exited; stopping the relay it was using");
-            self.stop_boost();
+            self.stop_boost(lifecycle::ActionSource::Auto);
             self.auto_started_for_presence = false;
         } else {
             self.auto_started_for_presence = false;
+        }
+
+        // P0-1: one `presence` record per observed transition (and one per new
+        // scan-error streak), carrying the latch state this frame's decision
+        // left behind. Pure logging: the branches above already ran unchanged.
+        if let Some(cause) = cause {
+            lifecycle::emit(
+                "presence",
+                &lifecycle::Presence {
+                    from,
+                    to: presence_token(self.auto_detected_game.as_deref()),
+                    cause,
+                    scan_ms: update.scan_ms,
+                    latch: Some(presence_latch(self.auto_started_for_presence)),
+                },
+            );
         }
     }
 
@@ -2281,7 +2541,7 @@ impl<P: Platform> LightSpeedApp<P> {
     fn toggle_relay_connection(&mut self) {
         if self.status.connected {
             if self.status.interceptor_active {
-                self.stop_boost();
+                self.stop_boost(lifecycle::ActionSource::Button);
             }
             let _ = self.commands.disconnect();
             // A user disconnect ends any connect attempt this window started; a
@@ -2846,7 +3106,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// itself; each branch is the existing command).
     fn apply_action(&mut self, surface: &RouteSurface) {
         if surface.action.danger {
-            self.stop_boost();
+            self.stop_boost(lifecycle::ActionSource::Button);
             return;
         }
         if !self.is_admin {
@@ -2854,11 +3114,11 @@ impl<P: Platform> LightSpeedApp<P> {
             return;
         }
         if self.status.any_data_plane_active() {
-            self.stop_boost();
+            self.stop_boost(lifecycle::ActionSource::Button);
         } else if self.game_manual && !self.server_input.trim().is_empty() {
             self.start_manual_redirect();
         } else {
-            self.start_boost();
+            self.start_boost(lifecycle::ActionSource::Button);
         }
     }
 
@@ -3087,6 +3347,136 @@ impl<P: Platform> LightSpeedApp<P> {
             }
         }
         status
+    }
+
+    // ── P0-1: render-side observation (ui.word / ui_error / ui_state) ─────
+
+    /// Record the presentation facts that changed for this frame.
+    ///
+    /// Called once at the one-snapshot seam, after the surface is computed and
+    /// before it is painted. Every path here is a pure logging side effect: no
+    /// observation is read back into the surface, the engine or the commands, so
+    /// a sink that cannot be written cannot change what the window does.
+    fn observe_presentation(&mut self, surface: &RouteSurface) {
+        let boosting = self.status.any_data_plane_active();
+        if let Some(change) = self.ui_word.observe(surface.word, boosting) {
+            lifecycle::emit(
+                "ui.word",
+                &lifecycle::UiWord {
+                    from: change.from.to_string(),
+                    to: change.to.to_string(),
+                    reason: change.reason.to_string(),
+                    boosting: change.boosting,
+                },
+            );
+        }
+
+        // The error panel is painted exactly when the word is `Error`, so the
+        // card's visibility is that same fact.
+        let current = (surface.word == RouteWord::Error).then(|| self.card_facts());
+        let Some(observation) = self.error_card.observe(current, std::time::Instant::now()) else {
+            return;
+        };
+        lifecycle::emit("ui_error", &self.ui_error_event(&observation, surface));
+        if observation.change == CardChange::Show {
+            // One semantic screen dump per appearance (no screenshot in v1).
+            lifecycle::emit("ui_state", &self.ui_state_event(surface));
+        }
+    }
+
+    /// The identity of the error card the surface would paint now.
+    ///
+    /// The taxonomy/sentence/detail come from the same `engine_error()` fact the
+    /// card renders; the debug-only capture fixture paints an error the engine
+    /// never produced, so it is recorded with no named kind instead of a guess.
+    fn card_facts(&self) -> CardFacts {
+        match self.engine_error() {
+            Some(error) => CardFacts {
+                kind: Some(error.kind),
+                detail_key: route_surface::error_line_key(error.kind),
+                detail: error.detail,
+                source: Some(route_surface::error_source_for(error.kind)),
+            },
+            None => CardFacts {
+                kind: None,
+                detail_key: "state.error",
+                detail: None,
+                source: None,
+            },
+        }
+    }
+
+    /// One `ui_error` record for the observed card transition.
+    fn ui_error_event(
+        &self,
+        observation: &CardObservation,
+        surface: &RouteSurface,
+    ) -> lifecycle::UiError {
+        // A clear names the card being cleared; a show/replace names the card
+        // now up.
+        let facts = observation
+            .current
+            .as_ref()
+            .or(observation.previous.as_ref());
+        let (kind, detail_key, reason_code, source) = match facts {
+            Some(facts) => (
+                facts
+                    .kind
+                    .map(|kind| format!("{kind:?}"))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                Some(facts.detail_key.to_string()),
+                facts.detail.clone(),
+                facts.source,
+            ),
+            None => (String::new(), None, None, None),
+        };
+        lifecycle::UiError {
+            op: match observation.change {
+                CardChange::Show => lifecycle::UiErrorOp::Show,
+                CardChange::Clear => lifecycle::UiErrorOp::Clear,
+                CardChange::Replace => lifecycle::UiErrorOp::Replace,
+            },
+            source,
+            kind,
+            detail_key,
+            // The core records the failing command with its own `ui_error`; the
+            // render side does not re-attribute that command.
+            source_command: None,
+            // The primary state surface the card sits over: the action slot for
+            // an appearance/replacement, the word that replaced the card on a
+            // clear.
+            visible_primary_state: Some(match observation.change {
+                CardChange::Clear => surface.word.key().to_string(),
+                CardChange::Show | CardChange::Replace => surface.action.label_key.to_string(),
+            }),
+            reason_code,
+            cleared_by: match observation.change {
+                CardChange::Clear => Some(format!("word:{}", surface.word.key())),
+                CardChange::Show | CardChange::Replace => None,
+            },
+            age_ms: match observation.change {
+                CardChange::Show => None,
+                CardChange::Clear | CardChange::Replace => Some(observation.age_ms),
+            },
+        }
+    }
+
+    /// One `ui_state` record: the semantic screen dump v1 records in place of a
+    /// screenshot.
+    fn ui_state_event(&self, surface: &RouteSurface) -> lifecycle::UiState {
+        let registration = match &self.status.registration_error {
+            Some(error) => Some(format!("error:{error}")),
+            None => Some(format!("registered={}", self.status.control_registered)),
+        };
+        lifecycle::UiState {
+            action_slot: surface.action.label_key.to_string(),
+            relay: self.selected_entry().map(|entry| entry.addr.to_string()),
+            registration,
+            error: self.engine_error().map(|error| format!("{:?}", error.kind)),
+            boosting: self.status.any_data_plane_active(),
+            locked_server: self.locked_addr.map(|server| server.to_string()),
+            relay_rtt_ms: (self.status.latest_rtt_ms > 0.0).then_some(self.status.latest_rtt_ms),
+        }
     }
 
     /// The route's carry memory as the shared filter sees it.
@@ -4323,7 +4713,7 @@ impl<P: Platform> LightSpeedApp<P> {
     fn start_manual_redirect(&mut self) {
         // A manual redirect replaces automatic interception: close that diverting
         // filter through the normal teardown instead of leaving both running.
-        self.stop_boost();
+        self.stop_boost(lifecycle::ActionSource::Button);
         let Some(server_addr) = parse_server_addr(&self.server_input) else {
             return;
         };
@@ -4535,6 +4925,21 @@ impl<P: Platform> LightSpeedApp<P> {
                                             if let Some(asset) = status.installer.clone() {
                                                 *lock_or_recover(&self.install_shared) = None;
                                                 self.update_check = UpdateCheckState::Installing;
+                                                // P0-1: the install thread below
+                                                // shuts the engine down outside the
+                                                // command path, so name the reason
+                                                // here; the engine's authoritative
+                                                // shutdown record then says `update`
+                                                // instead of `user_stop`.
+                                                lifecycle::set_intent(exit_intent(
+                                                    lifecycle::InterceptReason::Update,
+                                                ));
+                                                // T15: the install is a
+                                                // capture-crossing action whose
+                                                // shutdown runs on the install
+                                                // thread, so its one gui.action
+                                                // record is taken here, at the click.
+                                                self.commands.record_update_install();
                                                 let shared = Arc::clone(&self.install_shared);
                                                 let engine = Arc::clone(&self.engine);
                                                 std::thread::spawn(move || {
@@ -4645,7 +5050,11 @@ impl<P: Platform> LightSpeedApp<P> {
         ) {
             CloseDecision::Exit => {
                 tracing::info!("Quit requested - stopping engine");
-                self.shutdown_engine();
+                // T15: quit is a system flow, not a button press.
+                self.shutdown_engine(
+                    lifecycle::InterceptReason::Quit,
+                    lifecycle::ActionSource::System,
+                );
                 std::process::exit(0);
             }
             CloseDecision::Hide => {
@@ -4675,7 +5084,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     // The tray has no route surface to stop the data plane from,
                     // so the command does: a dropped control plane must never
                     // leave a warm diverting filter behind.
-                    self.stop_boost();
+                    self.stop_boost(lifecycle::ActionSource::Tray);
                     let _ = self.commands.disconnect();
                 }
             }
@@ -4762,6 +5171,8 @@ impl<P: Platform> LightSpeedApp<P> {
 
         // ── One status snapshot for the whole frame (W2-1 seam) ─────────────
         let surface = route_surface::route_surface(&self.app_status());
+        // P0-1: record the presentation facts that just changed (log only).
+        self.observe_presentation(&surface);
 
         // ── Tray icon state machine ─────────────────────────────────────────
         // The tray projects the same snapshot, so `RelayStarved` can never be
@@ -5027,5 +5438,129 @@ impl<P: Platform> LightSpeedApp<P> {
             Duration::from_secs(1)
         };
         ctx.request_repaint_after(repaint_interval);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  P0-1 render-side observation tests
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The card tracker is pure state: these tests drive it with explicit Instants
+// and assert the show/clear/replace admission rule and the visible age, which
+// is exactly what the render side turns into `ui_error`.
+
+#[cfg(test)]
+mod p0_1_render_observation_tests {
+    use super::*;
+    use lightspeed_client::app::dto::AppErrorKind;
+
+    fn facts(kind: AppErrorKind, detail: &str) -> CardFacts {
+        CardFacts {
+            kind: Some(kind),
+            detail_key: route_surface::error_line_key(kind),
+            detail: Some(detail.to_string()),
+            source: Some(route_surface::error_source_for(kind)),
+        }
+    }
+
+    /// Appearance, replacement and clearing are each observed exactly once. An
+    /// unchanged card on the next frame is not a transition and must not flood
+    /// the trace.
+    #[test]
+    fn the_card_is_observed_on_appear_replace_and_clear_only() {
+        let mut tracker = CardTracker::default();
+        let t0 = std::time::Instant::now();
+
+        assert_eq!(tracker.observe(None, t0), None, "no card, no event");
+
+        let shown = tracker
+            .observe(Some(facts(AppErrorKind::Tunnel, "boom")), t0)
+            .expect("a card appearing is a show");
+        assert_eq!(shown.change, CardChange::Show);
+        assert_eq!(shown.age_ms, 0);
+        assert!(shown.previous.is_none());
+        assert_eq!(
+            shown.current.as_ref().and_then(|facts| facts.kind),
+            Some(AppErrorKind::Tunnel)
+        );
+
+        assert_eq!(
+            tracker.observe(
+                Some(facts(AppErrorKind::Tunnel, "boom")),
+                t0 + std::time::Duration::from_millis(250)
+            ),
+            None,
+            "the same card on the next frame is not a transition"
+        );
+
+        let replaced = tracker
+            .observe(
+                Some(facts(AppErrorKind::Route, "registration failed")),
+                t0 + std::time::Duration::from_millis(500),
+            )
+            .expect("a different error is a replacement");
+        assert_eq!(replaced.change, CardChange::Replace);
+        assert_eq!(replaced.age_ms, 500);
+        assert_eq!(
+            replaced.previous.as_ref().and_then(|facts| facts.kind),
+            Some(AppErrorKind::Tunnel)
+        );
+
+        let cleared = tracker
+            .observe(None, t0 + std::time::Duration::from_millis(1_500))
+            .expect("a card disappearing is a clear");
+        assert_eq!(cleared.change, CardChange::Clear);
+        assert_eq!(cleared.age_ms, 1_000);
+        assert!(cleared.current.is_none());
+        assert_eq!(
+            cleared.previous.as_ref().and_then(|facts| facts.kind),
+            Some(AppErrorKind::Route),
+            "a clear names the card that was up"
+        );
+
+        assert_eq!(
+            tracker.observe(None, t0 + std::time::Duration::from_millis(2_000)),
+            None,
+            "no card twice is not a transition"
+        );
+    }
+
+    /// The rule is decided from the card identity alone, so two frames that
+    /// point at the same engine error cannot churn the trace.
+    #[test]
+    fn the_transition_rule_is_pure_and_identity_based() {
+        let first = facts(AppErrorKind::Config, "bad config");
+        let same = facts(AppErrorKind::Config, "bad config");
+        assert_eq!(first, same, "the same error has the same card identity");
+        assert_eq!(card_change(None, None), None);
+        assert_eq!(card_change(Some(&first), Some(&same)), None);
+        assert_eq!(card_change(None, Some(&first)), Some(CardChange::Show));
+        assert_eq!(card_change(Some(&first), None), Some(CardChange::Clear));
+        assert_eq!(
+            card_change(Some(&first), Some(&facts(AppErrorKind::Io, "disk"))),
+            Some(CardChange::Replace)
+        );
+    }
+
+    /// `exit_intent` labels the flows that hand the process away without
+    /// touching any command: quit and update are user actions, the elevation
+    /// handoff is the system taking over.
+    #[test]
+    fn exit_intents_label_the_flows_that_hand_the_process_away() {
+        let quit = exit_intent(lifecycle::InterceptReason::Quit);
+        assert_eq!(quit.reason, lifecycle::InterceptReason::Quit);
+        assert_eq!(quit.actor, lifecycle::Actor::User);
+        assert_eq!(quit.command_id, "quit");
+
+        let update = exit_intent(lifecycle::InterceptReason::Update);
+        assert_eq!(update.reason, lifecycle::InterceptReason::Update);
+        assert_eq!(update.actor, lifecycle::Actor::User);
+
+        let handoff = exit_intent(lifecycle::InterceptReason::ElevationHandoff);
+        assert_eq!(handoff.actor, lifecycle::Actor::System);
+        assert_eq!(handoff.command_id, "elevation_handoff");
+
+        let other = exit_intent(lifecycle::InterceptReason::Unknown);
+        assert_eq!(other.actor, lifecycle::Actor::Internal);
     }
 }

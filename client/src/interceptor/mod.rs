@@ -22,6 +22,9 @@
 //!     path_mtu: 1492,
 //!     initial_routes: vec![],   // or pre-filled from ProcessScanner
 //!     proxy_addr: "185.1.2.3:4434".parse().unwrap(),
+//!     // P0-4 / T12: `true` installs the hold before the first packet can
+//!     // tunnel; every builder starts `false` (unheld, the shipped default).
+//!     start_held: false,
 //!     fec_enabled: false,
 //!     fec_k: 4,
 //!     adaptive_fec: Default::default(),
@@ -50,14 +53,29 @@
 //! ## Pinned WinDivert driver (Windows)
 //!
 //! A Stop/start cycle on Windows closes and reopens the diverting WinDivert
-//! handles. If that also unloads and reloads the driver, a WFP filter can be
-//! left registered and the next open fails with `FWP_E_IN_USE` (0x8032000A).
-//! The engine therefore keeps ONE permanent non-diverting handle alive with
-//! [`pin_driver`] for the app lifetime: a normal interception stop closes the
-//! intercept/inject/shadow handles and leaves the pin (and the loaded driver)
-//! alone, and [`release_driver_pin`] closes the pin only at explicit app
-//! shutdown. Both functions are idempotent and are no-ops on builds without
-//! WinDivert, so engine code can call them unconditionally.
+//! handles. In the observed environment WinDivert 2.2 keeps the driver loaded
+//! after the last close, so this is not a driver unload/reload path; a WFP
+//! filter can still be left referenced and the next open fail with
+//! `FWP_E_IN_USE` (0x8032000A) even with the pin held. The engine therefore
+//! keeps ONE permanent non-diverting handle alive with [`pin_driver`] for the
+//! app lifetime: it keeps the driver referenced across a normal interception
+//! stop (which closes the intercept/inject/shadow handles and leaves the pin
+//! alone), and [`release_driver_pin`] closes the pin only at explicit app
+//! shutdown. The pin owns no WFP object and is **not** a WFP-state guarantee.
+//! Both functions are idempotent and are no-ops on builds without WinDivert, so
+//! engine code can call them unconditionally.
+//!
+//! ## Restart resilience (P0-2, Windows)
+//!
+//! A failed diverting open is recovered before the remedy is shown: R1 retries
+//! `FWP_E_IN_USE` with an exponential backoff (50 ms doubling, capped at 400 ms)
+//! for at most 6 attempts inside a 5 s wall-clock budget - **with the pin held
+//! too**, because a held pin is a device handle, not a WFP state lock - and R2
+//! then releases and reopens the pin once and retries the open once. Both rungs
+//! are automatic and bounded by attempts *and* wall clock. R3 (an explicit
+//! "Reset interception driver" action) is not implemented and deliberately not
+//! automatic (owner decision OD-1 is open); R4 (a full shutdown/reboot) is the
+//! last-resort copy, never the first-line remedy.
 //!
 //! ```rust,no_run
 //! use lightspeed_client::interceptor::{driver_pin_active, pin_driver, release_driver_pin};
@@ -123,13 +141,17 @@ pub use traits::{
 // second handle.
 
 /// Open the permanent non-diverting WinDivert handle that keeps the driver
-/// loaded for the app lifetime.
+/// referenced for the app lifetime.
 ///
 /// On Windows builds with the `windivert-redirect` feature this opens one
 /// WinDivert handle with the `"false"` filter (network layer, priority 0,
-/// normal flags): it diverts no traffic and spawns no threads, it only keeps the
-/// WinDivert driver/service loaded so a normal interception Stop/start never
-/// unloads and reloads it. Call it before the first interceptor start.
+/// normal flags): it diverts no traffic and spawns no threads, and it keeps the
+/// WinDivert driver referenced so a normal interception Stop/start works from a
+/// process that already had a handle. It is **not** an unload-prevention
+/// guarantee: WinDivert 2.2 keeps the driver loaded after the last close in the
+/// observed environment, and a held pin does not make the next open succeed
+/// (the 2026-11-23 field trace shows the pin held and the next intercept open
+/// failing). Call it before the first interceptor start.
 ///
 /// Idempotent: when a pin is already held it returns `Ok(())` without opening a
 /// second handle, so Optimize may call it unconditionally. A normal interception
@@ -143,9 +165,10 @@ pub use traits::{
 ///
 /// `Err(String)` carries the actionable remedy - not elevated, driver
 /// missing/blocked, or a persistent stale WFP state. A `FWP_E_IN_USE`
-/// (`0x8032000A`) failure with no pin held is retried a small bounded number of
-/// times with backoff first; if the stale state survives the budget the error
-/// is reported, never hidden.
+/// (`0x8032000A`) failure is retried with a bounded attempt-and-wall-clock
+/// budget first, **pinned or not** (the pin never suppresses the retry); the
+/// pin's own open has no pin-cycle rung. If the stale state survives the budget
+/// the error is reported, never hidden.
 ///
 /// On non-Windows builds and builds without `windivert-redirect` there is no
 /// driver to keep loaded: this is a no-op returning `Ok(())`.
@@ -198,6 +221,59 @@ pub fn release_driver_pin() {}
 #[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
 pub fn driver_pin_active() -> bool {
     false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Lifecycle instrumentation accessors (P0-1b)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Read-only views of the WinDivert handle lifecycle for the engine's record.
+// The events themselves are emitted from the backend; these accessors exist so
+// a later engine change can stamp the same facts into `InterceptorFacts`
+// without parsing prose. They are pure reads; nothing in the capture path
+// branches on them.
+
+/// Milliseconds since the last successful WinDivert handle close in this
+/// process, or `None` before the first successful close.
+///
+/// This is the close→open age of the *handle layer*: the field trace's Stop at
+/// 06:49:38.561 followed by the first failing open at 06:49:39.841 is exactly a
+/// `ms_since_last_close` reading. The 60 s support-bundle rate limit and every
+/// event record use the same sink; this accessor only reads the anchor.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub(crate) fn ms_since_last_close() -> Option<u64> {
+    windivert_handle::ms_since_last_close()
+}
+
+/// The id of the pinned WinDivert handle while one is held (P0-1 accessor).
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub(crate) fn driver_pin_id() -> Option<u64> {
+    windivert_handle::driver_pin_id()
+}
+
+/// Every WinDivert handle believed open in this process, rendered
+/// `intercept:2,inject:3` - the same value the lifecycle events carry.
+#[cfg(all(target_os = "windows", feature = "windivert-redirect"))]
+pub(crate) fn live_handle_ids() -> String {
+    windivert_handle::live_handle_ids()
+}
+
+/// No WinDivert handles exist on this build, so there is no close→open age.
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub(crate) fn ms_since_last_close() -> Option<u64> {
+    None
+}
+
+/// No driver pin exists on this build.
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub(crate) fn driver_pin_id() -> Option<u64> {
+    None
+}
+
+/// No WinDivert handles exist on this build.
+#[cfg(not(all(target_os = "windows", feature = "windivert-redirect")))]
+pub(crate) fn live_handle_ids() -> String {
+    String::new()
 }
 
 /// Per-kind WinDivert handle lifecycle counters, for tests and evidence runs.
@@ -552,6 +628,9 @@ fn assemble_config(
         path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
         initial_routes,
         proxy_addr,
+        // P0-4 / T12: every builder starts unheld; only a caller that opts in
+        // (`InterceptorRequest::with_hold_on_start`) has this set after the build.
+        start_held: false,
         fec_enabled,
         fec_k,
         adaptive_fec,
@@ -1247,6 +1326,7 @@ mod tests {
             path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+            start_held: false,
             fec_enabled: true,
             fec_k: 4,
             adaptive_fec: Default::default(),
@@ -1295,6 +1375,7 @@ mod tests {
                 path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
                 initial_routes: vec![],
                 proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+                start_held: false,
                 fec_enabled: false,
                 fec_k: 4,
                 adaptive_fec: Default::default(),
@@ -1322,6 +1403,7 @@ mod tests {
             path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: "127.0.0.1:4434".parse().unwrap(),
+            start_held: false,
             fec_enabled: false,
             fec_k: 4,
             adaptive_fec: Default::default(),

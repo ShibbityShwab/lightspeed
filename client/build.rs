@@ -12,6 +12,10 @@
 //! a missing or unreadable source file is reported as a warning so the failure
 //! surfaces where it is actionable (the interceptor's own availability check),
 //! not as a compile error in an unrelated crate.
+//!
+//! It also bakes the source commit into the binary for the lifecycle
+//! instrumentation (P0-1, `client/src/app/lifecycle.rs`). That stamp is best
+//! effort: a build without `git` records `unknown` rather than failing.
 
 use std::path::Path;
 
@@ -19,6 +23,8 @@ use std::path::Path;
 const RUNTIME_FILES: [&str; 2] = ["WinDivert.dll", "WinDivert64.sys"];
 
 fn main() {
+    stamp_build_commit();
+
     println!("cargo:rerun-if-changed=windivert/WinDivert.dll");
     println!("cargo:rerun-if-changed=windivert/WinDivert64.sys");
 
@@ -61,4 +67,24 @@ fn main() {
             println!("cargo:warning=could not place {name} next to the binary: {e}");
         }
     }
+}
+
+/// Record the source commit the binary was compiled from (`LIGHTSPEED_BUILD_COMMIT`).
+///
+/// Read once by [`lightspeed_client::app::lifecycle`] and stamped into every
+/// lifecycle record, so a field trace is attributable to a binary (A12). A build
+/// with no `git` on PATH records `unknown`, which is a truthful answer and never
+/// a build failure.
+fn stamp_build_commit() {
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=LIGHTSPEED_BUILD_COMMIT={commit}");
+    println!("cargo:rerun-if-changed=build.rs");
 }

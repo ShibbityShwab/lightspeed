@@ -196,18 +196,23 @@ The interceptor seizes packets before the game can receive responses, and the in
 
 ### "WinDivert open failed" / `FWP_E_IN_USE` (0x8032000A) on Windows
 
-WinDivert registers a WFP callout/filter for each open handle. If a handle is never closed, that filter state lingers, and the next `WinDivertOpen` fails with `FWP_E_IN_USE` (0x8032000A) even though no process is visibly using WinDivert.
+Only the handles that carry a real capture filter — the intercept (`udp and outbound …`) and the shadow (`udp and inbound …`) handles — own a WFP callout/filter. The process-lifetime pin and the inject handle use the `"false"` filter, divert nothing, and own no WFP object. A WFP callout/filter is therefore not "one per open handle", and a held pin is not a WFP-state lock: the 2026-11-23 field trace has the pin open and the next intercept open still failing `FWP_E_IN_USE`.
 
-Recent LightSpeed builds close both the capture and inject handles on every orderly shutdown path, including Ctrl+C in `--watch` and `--start-interceptor` and **Quit** in the GUI, and the receive loop is unblocked with `WinDivertShutdown` before the close so teardown is deterministic. A hard kill (`taskkill /f`, a crash, or closing the console window) can still leave the WinDivert 2.2.x driver with stale state; that is an upstream driver limitation (basil00/WinDivert#294, #406) that userspace cannot clear once the process is gone.
+`FWP_E_IN_USE` means the WFP object is still referenced (for example a previous process's filter that the kernel has not finished deleting after a hard kill), or that a callout is being registered/unregistered concurrently. "No process is visibly using WinDivert" does not prove that nothing holds the reference, and no WFP state is captured today, so do not treat the error text as a root cause.
 
-If you still hit it:
+LightSpeed closes the intercept, inject and shadow handles on every orderly shutdown path (Ctrl+C in `--watch`/`--start-interceptor`, **Quit** in the GUI), unblocks the receive loop with `WinDivertShutdown` before the close, and waits for the owner threads to acknowledge. That determinism applies to the app's **handle ownership**; the kernel-side WFP teardown is a separate path and its failures are not visible to userspace.
 
-1. **Quit gracefully and wait a moment**: use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
-2. **Stop the WinDivert service** (avoids a reboot in some cases; note the driver is shared with any other WinDivert-based app on the machine):
+If it still happens:
+
+1. **Retry Start once.** The next patch retries `FWP_E_IN_USE` automatically while the pin is held (bounded, ~5 s) and can cycle the pin once; 1.12.5 retries only while **no** pin is held, so a retry means Stop and Optimize again.
+2. **Quit gracefully and wait a moment**: use the CLI Ctrl+C or the GUI's **Quit**, then give the handles a second or two to close before relaunching.
+3. **Stop the WinDivert service** (administrator; this is an explicit reset, not something LightSpeed does automatically, and it affects every other WinDivert-based app on the machine — make sure no other WinDivert client is running first):
    ```powershell
    sc stop windivert
    ```
-3. **Full shutdown, not restart**: Windows "Restart" can reuse the kernel session that holds the stale state; a full **Shutdown → power on** clears it.
+4. **Full shutdown** is the last resort, and only when an external WinDivert user cannot be excluded: a Windows **Restart** can reuse the kernel session that holds the stale state, so a full **Shutdown → power on** is the only reliable machine-level clear. It is not the first-line fix and LightSpeed will not tell you to reboot without that reason.
+
+WinDivert 2.2 keeps its driver loaded after the last handle closes: the WFP provider and its 20 sublayers remain (1 / 20) and `WinDivert64.sys` stays locked until the service is stopped or the machine is restarted. That is unchanged by the pin and is not a "driver unloads on Stop" guarantee.
 
 > **Tip:** On v1.2.2 and earlier, a separate bug (data-plane auth rejecting all packets, issue #59) froze the connection and forced users to repeatedly kill the client, which is what triggered most `FWP_E_IN_USE` reports. That auth bug is fixed in v1.2.3.
 

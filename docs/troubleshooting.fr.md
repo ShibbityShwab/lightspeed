@@ -199,20 +199,25 @@ L'intercepteur saisit les paquets avant que le jeu ne puisse recevoir des répon
 
 ### "Échec de l'ouverture de WinDivert" / `FWP_E_IN_USE` (0x8032000A) sous Windows
 
-WinDivert enregistre une légende/filtre WFP pour chaque handle ouvert. Si un handle n'est jamais fermé, cet état de filtre persiste et le `WinDivertOpen` suivant échoue avec `FWP_E_IN_USE` (0x8032000A) même si aucun processus n'utilise visiblement WinDivert.
+Seuls les handles qui portent un vrai filtre de capture — l'interception (`udp and outbound …`) et l'ombre (`udp and inbound …`) — possèdent un callout/filtre WFP. Le handle d'épinglage (pin) lié à la durée de vie du processus et le handle d'injection utilisent le filtre `"false"`, ne détournent aucun trafic et ne possèdent aucun objet WFP. Un callout/filtre WFP n'est donc pas « un par handle ouvert », et un pin maintenu n'est pas un verrou d'état WFP : dans la trace terrain du 23/11/2026, le pin est ouvert et l'ouverture d'interception suivante échoue toujours avec `FWP_E_IN_USE`.
 
-Les versions récentes de LightSpeed ​​ferment les poignées de capture et d'injection sur chaque chemin d'arrêt ordonné, y compris Ctrl+C dans `--watch` et `--start-interceptor` et **Quit** dans l'interface graphique, et la boucle de réception est débloquée avec `WinDivertShutdown` avant la fermeture, le démontage est donc déterministe. Un arrêt brutal (`taskkill /f`, un crash ou la fermeture de la fenêtre de la console) peut toujours laisser le pilote WinDivert 2.2.x dans un état obsolète ; il s'agit d'une limitation du pilote en amont (basil00/WinDivert#294, #406) que l'espace utilisateur ne peut pas effacer une fois le processus terminé.
+`FWP_E_IN_USE` signifie que l'objet WFP est encore référencé (par exemple le filtre d'un processus précédent que le noyau n'a pas fini de supprimer après un arrêt forcé), ou qu'un callout est en cours d'enregistrement/désenregistrement concurrent. « Aucun processus n'utilise WinDivert visiblement » ne prouve pas que rien ne détient la référence, et aucun état WFP n'est capturé aujourd'hui : ne traitez pas le texte de l'erreur comme une cause racine.
 
-Si vous frappez toujours :
+LightSpeed ferme les handles d'interception, d'injection et d'ombre sur chaque chemin d'arrêt ordonné (Ctrl+C dans `--watch`/`--start-interceptor`, **Quitter** dans l'interface), débloque la boucle de réception avec `WinDivertShutdown` avant la fermeture et attend l'accusé des threads propriétaires. Ce déterminisme porte sur la **propriété des handles** de l'application ; le teardown WFP côté noyau est un chemin distinct dont les échecs ne sont pas visibles depuis l'espace utilisateur.
 
-1. **Quittez gracieusement et attendez un moment** : utilisez la CLI Ctrl+C ou **Quitter** de l'interface graphique, puis donnez aux poignées une seconde ou deux pour se fermer avant de relancer.
-2. **Arrêtez le service WinDivert** (évite un redémarrage dans certains cas ; notez que le pilote est partagé avec toute autre application basée sur WinDivert sur la machine) :
+Si le problème persiste :
+
+1. **Relancez Démarrer une fois.** Le prochain correctif réessaie `FWP_E_IN_USE` automatiquement tant que le pin est maintenu (borné, ~5 s) et peut recycler le pin une fois ; la 1.12.5 ne réessaie que lorsqu'**aucun** pin n'est maintenu, donc y réessayer revient à Arrêter puis Optimiser à nouveau.
+2. **Quittez proprement et attendez un instant** : utilisez Ctrl+C dans la CLI ou **Quitter** dans l'interface, puis laissez une ou deux secondes aux handles pour se fermer avant de relancer.
+3. **Arrêtez le service WinDivert** (administrateur ; c'est une réinitialisation explicite que LightSpeed ne fait pas automatiquement, et elle affecte toute autre application basée sur WinDivert sur la machine — vérifiez d'abord qu'aucun autre client WinDivert ne tourne) :
    ```powershell
    sc stop windivert
    ```
-3. **Arrêt complet, pas de redémarrage** : le « redémarrage » de Windows peut réutiliser la session du noyau qui contient l'état obsolète ; un **arrêt → mise sous tension** complet l'efface.
+4. **L'arrêt complet** est le dernier recours, et uniquement lorsqu'un utilisateur WinDivert externe ne peut pas être exclu : un **Redémarrer** de Windows peut réutiliser la session noyau qui détient l'état obsolète, donc un **Arrêter → rallumer** complet est le seul nettoyage fiable au niveau machine. Ce n'est pas la première solution et LightSpeed ne vous demandera pas de redémarrer sans cette raison.
 
-> **Conseil :** Sur la version 1.2.2 et les versions antérieures, un bug distinct (authentification du plan de données rejetant tous les paquets, problème n° 59) a gelé la connexion et forcé les utilisateurs à tuer le client à plusieurs reprises, ce qui a déclenché la plupart des rapports `FWP_E_IN_USE`. Ce bug d'authentification est corrigé dans la v1.2.3.
+WinDivert 2.2 garde son pilote chargé après la fermeture du dernier handle : le fournisseur WFP et ses 20 sous-couches subsistent (1 / 20) et `WinDivert64.sys` reste verrouillé jusqu'à l'arrêt du service ou le redémarrage de la machine. Le pin n'y change rien et ce n'est pas une garantie que le pilote se décharge lors d'un Stop.
+
+> **Conseil :** dans les versions 1.2.2 et antérieures, un autre bug (l'authentification du plan de données rejetait tous les paquets, issue #59) gelait la connexion et forçait à tuer le client de façon répétée, ce qui a déclenché la plupart des rapports `FWP_E_IN_USE`. Ce bug d'authentification est corrigé en v1.2.3.
 
 ---
 

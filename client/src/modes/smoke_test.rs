@@ -113,6 +113,7 @@ async fn run_smoke_test_linux(proxy_addr: SocketAddrV4) -> anyhow::Result<()> {
         path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
         initial_routes: vec![],
         proxy_addr,
+        start_held: false,
         fec_enabled: false,
         fec_k: 4,
         adaptive_fec: Default::default(),
