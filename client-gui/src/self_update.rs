@@ -143,17 +143,32 @@ fn swap_script(zip: &Path, dest_dir: &Path, exe_name: &str) -> String {
         r#"$ErrorActionPreference = 'Stop'
 Get-Process lightspeed-gui -ErrorAction SilentlyContinue | ForEach-Object {{ $_.Kill(); $_.WaitForExit(8000) | Out-Null }}
 Start-Sleep -Seconds 2
-$extract = Join-Path $env:TEMP 'lightspeed-update-extract'
-if (Test-Path $extract) {{ Remove-Item $extract -Recurse -Force }}
-New-Item -ItemType Directory -Path $extract | Out-Null
-tar -xf '{zip}' -C $extract
-$new = Get-ChildItem -Path $extract -Recurse -Filter '*.exe' | Where-Object {{ $_.Name -eq '{exe_name}' }} | Select-Object -First 1
-if (-not $new) {{ throw 'the update archive contains no {exe_name}' }}
-$dst = Join-Path '{dest}' '{exe_name}'
-Copy-Item $new.FullName $dst -Force
-if ((Get-Item $dst).Length -ne $new.Length) {{ throw 'copy did not land (size mismatch)' }}
-Get-ChildItem -Path $extract -Recurse -Include 'WinDivert*.dll','WinDivert*.sys' -ErrorAction SilentlyContinue | ForEach-Object {{ Copy-Item $_.FullName '{dest}' -Force }}
-Start-Process $dst
+try {{
+    $extract = Join-Path $env:TEMP 'lightspeed-update-extract'
+    if (Test-Path $extract) {{ Remove-Item $extract -Recurse -Force }}
+    New-Item -ItemType Directory -Path $extract | Out-Null
+    tar -xf '{zip}' -C $extract
+    $new = Get-ChildItem -Path $extract -Recurse -Filter '*.exe' | Where-Object {{ $_.Name -eq '{exe_name}' }} | Select-Object -First 1
+    if (-not $new) {{ throw 'the update archive contains no {exe_name}' }}
+    $dst = Join-Path '{dest}' '{exe_name}'
+    Copy-Item $new.FullName $dst -Force
+    if ((Get-Item $dst).Length -ne $new.Length) {{ throw 'copy did not land (size mismatch)' }}
+    $runtime = @(Get-ChildItem -Path $extract -Recurse -Include 'WinDivert*.dll','WinDivert*.sys' -ErrorAction SilentlyContinue)
+    if ($runtime.Count -gt 0) {{
+        $svc = Get-Service -Name WinDivert -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Stopped') {{
+            sc.exe stop WinDivert | Out-Null
+            for ($i = 0; $i -lt 40; $i++) {{
+                $svc = Get-Service -Name WinDivert -ErrorAction SilentlyContinue
+                if (-not $svc -or $svc.Status -eq 'Stopped') {{ break }}
+                Start-Sleep -Milliseconds 250
+            }}
+        }}
+        $runtime | ForEach-Object {{ Copy-Item $_.FullName '{dest}' -Force }}
+    }}
+}} finally {{
+    if ($dst -and (Test-Path $dst)) {{ Start-Process $dst }}
+}}
 "#
     )
 }
@@ -194,6 +209,8 @@ mod tests {
             "lightspeed-gui.exe",
             "Get-Process lightspeed-gui",
             "size mismatch",
+            "sc.exe stop WinDivert",
+            "finally",
             "Start-Process $dst",
         ] {
             assert!(
