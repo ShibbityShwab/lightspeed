@@ -1,0 +1,46 @@
+{
+  "schema": "lightspeed-p0-6-published-baseline/v1",
+  "purpose": "Exact-artifact baseline for the P0-6 real-driver gate. A run whose installed/candidate artifacts do not equal these hashes is BLOCKED, not warned.",
+  "tag": "v1.12.5",
+  "release_target_commit": "6e30a65fe668fe6eca2f2f152a988c9661b45e7b",
+  "release_api": "https://api.github.com/repos/ShibbityShwab/lightspeed/releases/tags/v1.12.5",
+  "release_zip_asset": "lightspeed-gui-x86_64-pc-windows-msvc.zip",
+  "release_zip_sha256": "B00AFD440580D06500E5BE763F719BF1845ACFA35C071AFB83ABC1A39AC70028",
+  "release_msi_asset": "lightspeed-gui-x86_64-pc-windows-msvc.msi",
+  "release_msi_sha256": "578BA36412FB60D4B1E6521F2446A30557DFB277A90DBBFB2E3061899290841E",
+  "sha256_sum_asset": "sha256.sum",
+  "members": {
+    "lightspeed-gui.exe": {
+      "path": "bin/lightspeed-gui.exe",
+      "size": 29559808,
+      "sha256": "EC02907E804E8DF9C359EDE24B621AC13D08BC64500D650F7BD5239D79E7E250",
+      "role": "installed GUI executable under test"
+    },
+    "WinDivert.dll": {
+      "path": "bin/WinDivert.dll",
+      "size": 47616,
+      "sha256": "C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2",
+      "role": "WinDivert userspace library shipped beside the GUI"
+    },
+    "WinDivert64.sys": {
+      "path": "bin/WinDivert64.sys",
+      "size": 94144,
+      "sha256": "8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2",
+      "role": "WinDivert kernel driver shipped beside the GUI"
+    }
+  },
+  "proxy": {
+    "windows_asset": null,
+    "windows_note": "The v1.12.5 release publishes no Windows proxy binary; the proxy assets are Linux-only. A12 records the published proxy asset hashes below; an installed Windows proxy is not part of the v1.12.5 desktop artifact.",
+    "linux_asset": "lightspeed-proxy-x86_64-unknown-linux-gnu.tar.xz",
+    "linux_sha256": "E95092491674B2FAF6B40F2B47D57EE3FEBEFC177480AE7D0C8A41F8A6F23F5C",
+    "linux_aarch64_asset": "lightspeed-proxy-aarch64-unknown-linux-gnu.tar.xz",
+    "linux_aarch64_sha256": "08DF01DBFDB17BA3397E48A1E00BE943AB8FEAA20FE4470CCD1CE596D77A7041"
+  },
+  "provenance": {
+    "recorded_at_utc": "2026-11-23T16:40:00Z",
+    "installed_members_source": "P0-1 artifact-verify.log (2026-11-23): installed GUI/DLL/SYS hashes matched the published release zip members byte-for-byte",
+    "release_hashes_source": "GitHub release v1.12.5 sha256.sum and releases API, re-fetched read-only 2026-11-23",
+    "note": "The identity gate re-fetches sha256.sum/API when online and blocks when the live release hashes disagree with this baseline (baseline drift)."
+  }
+}
