@@ -102,3 +102,13 @@ pub mod trace;
 /// verification and elevation stay in the GUI adapter.
 pub mod update;
 pub mod watchdog;
+
+/// Whether the process-wide interception driver pin is held.
+///
+/// The shared facade a front end uses instead of reaching into
+/// [`crate::interceptor`] directly (drift guard G1): a user Stop keeps the pin,
+/// so a held pin here means the engine was not explicitly shut down. Only
+/// `AppCore::shutdown` / `LightSpeedEngine::shutdown` release it.
+pub fn driver_pin_active() -> bool {
+    crate::interceptor::driver_pin_active()
+}

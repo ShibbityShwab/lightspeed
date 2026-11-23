@@ -228,6 +228,13 @@ pub fn fresh_direct_us(ping: Option<(f32, u64)>) -> Option<u64> {
 }
 
 /// The direct-ping record, only when it belongs to `server`.
+///
+/// Every consumer that describes a specific server's path asks through here: a
+/// sample measured against another server is not evidence about this one. This
+/// is the whole fix for the cross-server floor race observed live (task-24 §4):
+/// the server-following poll can run before the health poll, so for one frame
+/// the stored record can still describe the previous server, and the ranking
+/// must read that as "direct ping not measured", not as this server's floor.
 pub fn ping_for_server(ping: Option<ServerPing>, server: Ipv4Addr) -> Option<ServerPing> {
     ping.filter(|record| record.server == server)
 }
@@ -495,6 +502,20 @@ pub fn relayed_row_value(sent: u64, returned: u64) -> (String, bool) {
         format!("{sent} sent \u{00b7} {returned} returned"),
         RelayedPair { sent, returned }.starving(),
     )
+}
+
+/// Whether the start-of-match hold has outlived its fallback on a live run.
+///
+/// The fallback exists so a hold that never identifies the game server cannot
+/// strand a session on the direct path. It must never release a run that is not
+/// intercepting: a stopped run has no tunnelling gate, and a stale timestamp
+/// left over from the previous session is not a hold.
+pub fn stale_hold_due(
+    held_since: Option<std::time::Instant>,
+    intercepting: bool,
+    fallback: std::time::Duration,
+) -> bool {
+    held_since.is_some_and(|since| intercepting && since.elapsed() >= fallback)
 }
 
 #[cfg(test)]
@@ -997,6 +1018,36 @@ mod tests {
         let (unproven_pool, proven) = prefer_proven(server, candidates, &Memory::new());
         assert_eq!(proven, 0);
         assert_eq!(unproven_pool.len(), 2, "no proof shrinks nothing");
+    }
+
+    #[test]
+    fn a_stale_hold_never_releases_a_stopped_run() {
+        // The fallback is the one place a hold may end without a server. It must
+        // never touch a run that is not intercepting: the timestamp can outlive
+        // the run it described (Stop keeps the GUI alive), and releasing a
+        // stopped run would be a statement about a gate that does not exist.
+        let fallback = Duration::from_secs(120);
+        let stale = Some(
+            std::time::Instant::now()
+                .checked_sub(fallback + Duration::from_secs(1))
+                .expect("a clock with a past"),
+        );
+        assert!(
+            !stale_hold_due(stale, false, fallback),
+            "a stopped run has no hold to release, however stale the timestamp"
+        );
+        assert!(
+            stale_hold_due(stale, true, fallback),
+            "a live run past the fallback is the only release the fallback may make"
+        );
+        assert!(
+            !stale_hold_due(Some(std::time::Instant::now()), true, fallback),
+            "a young hold is not stale"
+        );
+        assert!(
+            !stale_hold_due(None, true, fallback),
+            "no hold was recorded, so the fallback has nothing to do"
+        );
     }
 
     #[test]

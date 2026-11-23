@@ -3,6 +3,12 @@
 **Status: release candidate, 2026-11-21.** Reliability hardening for the Windows
 interception path. No protocol, wire, config or CLI-surface change.
 
+> **Corrected 2026-11-23:** the `v1.12.3` tag was cut while this note still said
+> "release candidate", and the failure it addressed was never reproduced in a
+> controlled environment. See
+> [Post-release verification correction](#post-release-verification-correction-2026-11-23).
+> Historical tags are not rewritten.
+
 ## Why
 
 1.12.2 removed the relay-switch restart that was the main source of stale
@@ -73,3 +79,24 @@ A future patch should retain the failed handle and prove its release directly.
 - A machine that already carries stale WinDivert WFP objects still needs one
   Windows restart; 1.12.3 detects that state at preflight and names it, and
   prevents the normal start/stop paths from creating it again.
+
+## Post-release verification correction (2026-11-23)
+
+This note is kept as written and the tag is not rewritten. The record is
+corrected here.
+
+- **1.12.3 was tagged while this note said release candidate.** The published
+  release body (the CHANGELOG section) did not carry that status.
+- **The failure this patch addressed was not reproduced.** The changes here were
+  aimed at the stale-WinDivert/`FWP_E_IN_USE` failure, but the controlled control
+  run did not reproduce it: the 1.12.3 build itself ran 30 traffic-bearing
+  Stop/Optimize cycles on a clean boot with 0 failure hits (5 PASS rows, 1
+  BLOCKED control row;
+  `wat/evidence/2026-11-23/task-107-control-1123-20261123-120914/`). The sniff
+  preflight handle introduced here was later removed in 1.12.4 as a *suspected*
+  contributor to an orphaned WFP provider, and that attribution remains
+  unproven.
+- **The successor design supersedes this approach.** 1.12.5 removes the
+  unload/reload churn path with a permanent non-diverting driver pin and carries
+  an 84/84 real-driver matrix; see
+  [release-notes-1.12.5.md](release-notes-1.12.5.md).

@@ -440,6 +440,20 @@ impl SessionCommandState {
     pub fn clear_error(&mut self) {
         self.last_error = None;
     }
+
+    /// Clear a recorded error whose verbatim detail names a recovered
+    /// condition (e.g. a registration failure after registration succeeds).
+    /// Other command errors are left alone.
+    pub fn clear_error_matching(&mut self, needle: &str) {
+        let matches = self
+            .last_error
+            .as_ref()
+            .and_then(|error| error.detail.as_deref())
+            .is_some_and(|detail| detail.contains(needle));
+        if matches {
+            self.last_error = None;
+        }
+    }
 }
 
 /// The error taxonomy the Error row renders (spec §2.8). One kind, one sentence.
@@ -635,6 +649,28 @@ mod tests {
         assert!(session.last_error.is_some());
         session.clear_error();
         assert_eq!(session.last_error, None);
+    }
+
+    #[test]
+    fn a_recovered_registration_error_is_cleared_without_hiding_other_errors() {
+        let mut session = SessionCommandState::default();
+        session.fail(
+            SessionCommand::SelectRelay,
+            AppError::tunnel("control-plane registration failed"),
+        );
+        session.clear_error_matching("control-plane registration failed");
+        assert_eq!(
+            session.last_error, None,
+            "a successful background registration clears its stale card"
+        );
+
+        session.fail(SessionCommand::StartBoost, AppError::tunnel("driver busy"));
+        session.clear_error_matching("control-plane registration failed");
+        assert_eq!(
+            session.last_error.as_ref().map(|error| error.kind),
+            Some(AppErrorKind::Tunnel),
+            "an unrelated command error is not silently cleared"
+        );
     }
 
     #[test]

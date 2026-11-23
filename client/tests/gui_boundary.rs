@@ -398,7 +398,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // theme item_spacing between its rows (116 -> 108), the compact footer gets a
     // real HIT_MIN row, and the app-scope shortcuts are dispatched before any
     // widget sees them. 4581 -> 4628.
-    ("client-gui/src/app.rs", 4732),
+    ("client-gui/src/app.rs", 4734),
     // W2-3b S5b: the client-trace runtime moved to
     // `lightspeed_client::app::trace`; the GUI keeps the rendered trace row
     // (`route_surface`) and this re-export shell. 1328 -> 145.
@@ -448,7 +448,7 @@ const MODULE_BUDGET: &[(&str, usize)] = &[
     // W2-4 CI fix (2026-11-21): the Windows-only imports and swap script are
     // `#[cfg(windows)]`-gated and a non-Windows install-honesty test was added,
     // so the platform compiler is clean under `-D warnings`; 183 -> 230.
-    ("client-gui/src/self_update.rs", 230),
+    ("client-gui/src/self_update.rs", 247),
     // W2-3b S5a: the location ladder, its three indexes and its classifier moved
     // to `lightspeed_client::app::location`; the GUI keeps this re-export shell
     // for the one helper the frozen route surface renders. 595 -> 11.

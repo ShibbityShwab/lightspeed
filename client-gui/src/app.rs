@@ -30,6 +30,7 @@ use crate::update::UpdateStatus;
 use eframe::egui;
 use lightspeed_client::app::commands::AppCore;
 use lightspeed_client::app::dto as app_dto;
+use lightspeed_client::app::status::stale_hold_due;
 use lightspeed_client::interceptor::ProcessTarget;
 use lightspeed_client::profiles::schema::{is_valid_key, parse_port_range, slugify, PortRange};
 use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
@@ -1263,16 +1264,15 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// Give up on a hold that has not found a game server, rather than idle.
     ///
-    /// A hold with no deadline is a silent failure: a game the profiles do not
-    /// know, or one whose ports we do not match, would leave the app relaying
-    /// nothing and saying nothing. Falling back keeps the app doing what it did
-    /// before the hold existed, and a server that locks later is still routed to
-    /// the right relay.
+    /// The shared rule refuses a stopped run, so a timestamp left over from the
+    /// previous session cannot release this one; a live run past the fallback is
+    /// still released, exactly as before.
     fn release_stale_hold(&mut self) {
         let Some(since) = self.held_since else {
             return;
         };
-        if since.elapsed() < HOLD_FALLBACK {
+        let intercepting = lock_or_recover(&self.engine).is_intercepting();
+        if !stale_hold_due(Some(since), intercepting, HOLD_FALLBACK) {
             return;
         }
         self.held_since = None;
@@ -1532,8 +1532,10 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         self.discovery = DiscoveryState::Done;
     }
-
     fn poll_health(&mut self) {
+        if self.status.control_registered {
+            self.commands.clear_stale_registration_error();
+        }
         // Resolve the window's connect attempt from the engine's own facts: the
         // keepalive coming up, registration completing or a registration error
         // all end the attempt (spec §2.1/§2.2 row 2). This poll runs every frame
@@ -1582,10 +1584,13 @@ impl<P: Platform> LightSpeedApp<P> {
         // Stop the background watcher first and wait for it: a presence scan is
         // two process spawns, and the app must not go away while one runs.
         self.presence.shutdown();
-        let _ = self.commands.stop_boost();
-        let _ = self.commands.disconnect();
+        // Quit is an explicit engine shutdown: the true Stop, then release the
+        // driver pin after handle teardown. A user Stop never releases it, so a
+        // Quit is the one place the pin lifecycle ends with the process.
+        if let Err(error) = self.commands.shutdown() {
+            tracing::error!("engine shutdown did not complete cleanly: {error:?}");
+        }
     }
-
     fn start_update_check(&mut self) {
         if matches!(self.update_check, UpdateCheckState::Checking) {
             return;
@@ -1607,6 +1612,10 @@ impl<P: Platform> LightSpeedApp<P> {
     /// the engine binds it by image name against the live process table at start
     /// time. With no target the built-in Game path decides, exactly as before.
     fn start_boost(&mut self) {
+        // A self-update in flight has stopped this engine and will terminate it.
+        if matches!(self.update_check, UpdateCheckState::Installing) {
+            return;
+        }
         // The persisted "Custom Port Range" actuates here: a well-formed range
         // wins over the profile's own, and a blank or malformed one parses to
         // `None` so the profile default stands. A typo never panics the UI
@@ -1676,7 +1685,11 @@ impl<P: Platform> LightSpeedApp<P> {
         }
     }
 
-    /// Stop every active boost backend and clear the start timestamp.
+    /// Stop every active boost backend and clear the per-run state.
+    ///
+    /// A Stop is a true Stop: diverting handles close and only the non-diverting
+    /// driver pin stays. Clearing every per-run fact here keeps a later Optimize
+    /// from inheriting the previous run's hold, relay choice or locked address.
     fn stop_boost(&mut self) {
         if let Err(error) = self.commands.stop_boost() {
             tracing::error!("stop command failed: {error:?}");
@@ -1685,6 +1698,12 @@ impl<P: Platform> LightSpeedApp<P> {
         self.relayed_base = None;
         self.health_base = None;
         self.relay_health = None;
+        self.held_since = None;
+        self.chosen_for_server = None;
+        self.locked_addr = None;
+        self.locked_since = None;
+        self.holding = false;
+        self.server_chosen.store(false, Ordering::Relaxed);
     }
 
     /// Record what each path is doing, every ten seconds.
@@ -1722,7 +1741,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok());
         tracing::info!(
             direct_ms = server
-                .and_then(|server| self.server_ping_for(server))
+                .and_then(|server| ping_for_server(self.server_ping, server))
                 .map(|ping| ping.ms),
             direct_jitter_ms = server.map(lightspeed_client::latency::direct_jitter),
             shadow_jitter_ms = lightspeed_client::latency::shadow_direct_jitter_ms(),
@@ -1866,19 +1885,6 @@ impl<P: Platform> LightSpeedApp<P> {
         });
     }
 
-    /// The direct-ping record, only while it belongs to `server`.
-    ///
-    /// Every consumer that describes a specific server's path asks through here:
-    /// a sample measured against another server is not evidence about this one.
-    /// This is the whole fix for the cross-server floor race observed live
-    /// (task-24 §4): `follow_game_server` runs before `poll_relay_health`, so for
-    /// one frame the stored record can still describe the previous server, and
-    /// the ranking must read that as "direct ping not measured", not as this
-    /// server's floor.
-    fn server_ping_for(&self, server: Ipv4Addr) -> Option<ServerPing> {
-        ping_for_server(self.server_ping, server)
-    }
-
     /// What identifies the run the Relayed counters describe: a new relay or a new
     /// game server is a new session, and the row starts counting again.
     fn session_key(&self) -> String {
@@ -1930,7 +1936,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 .is_none_or(|(base_key, _, _)| *base_key != key);
             if stale {
                 if let (Some(sent), Some(returned)) = (
-                    self.session_sent(),
+                    self.status.session_sent(),
                     returned_count(
                         self.status.redirect_active,
                         self.status.redirect_pkts_in,
@@ -1997,6 +2003,9 @@ impl<P: Platform> LightSpeedApp<P> {
         // it, so the old sentence would describe a prompt that is no longer the
         // latest event.
         self.elevation_notice = None;
+        // The successor starts a fresh engine, and some platform backends exit
+        // inside `begin_elevation`: stop the diverting data plane before it.
+        self.stop_boost();
         let attempt = P::begin_elevation();
         tracing::info!("elevation handshake: {:?}", attempt.phase());
         self.elevation = Some(attempt);
@@ -2021,6 +2030,9 @@ impl<P: Platform> LightSpeedApp<P> {
         // terminate this process (C8). Declined/failed/ready keep the window.
         if phase.may_exit() {
             tracing::info!("elevated instance confirmed; exiting the unelevated process");
+            // The elevated successor starts a fresh engine; this process must
+            // not leave a diverting filter or a held pin behind on its way out.
+            self.shutdown_engine();
             std::process::exit(0);
         }
         if phase != ElevationPhase::Ready {
@@ -2141,7 +2153,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 // the engine's to manage until the game leaves.
                 self.auto_started_for_presence = true;
             }
-        } else if self.status.interceptor_active {
+        } else if self.status.any_data_plane_active() || self.held_since.is_some() {
             tracing::info!("Game exited; stopping the relay it was using");
             self.stop_boost();
             self.auto_started_for_presence = false;
@@ -2669,7 +2681,7 @@ impl<P: Platform> LightSpeedApp<P> {
             self.restart_elevated();
             return;
         }
-        if self.run_boosting() {
+        if self.status.any_data_plane_active() {
             self.stop_boost();
         } else if self.game_manual && !self.server_input.trim().is_empty() {
             self.start_manual_redirect();
@@ -2679,7 +2691,7 @@ impl<P: Platform> LightSpeedApp<P> {
     }
 
     fn cannot_beat_direct(&self) -> Option<(u64, u64)> {
-        if !self.run_boosting() || self.holding {
+        if !self.status.any_data_plane_active() || self.holding {
             return None;
         }
         let client_leg_us = self.current_client_leg_us()?;
@@ -2698,28 +2710,6 @@ impl<P: Platform> LightSpeedApp<P> {
         self.ranked_client_leg_us(relay)
     }
 
-    /// Whether any tunnel backend is currently carrying the game's traffic.
-    ///
-    /// One definition, because the rail, the tray and the route surface must not
-    /// disagree about whether the client is "on".
-    fn session_sent(&self) -> Option<u64> {
-        routed_count(
-            self.status.redirect_active,
-            self.status.redirect_pkts_out,
-            self.status.interceptor_active,
-            self.status.interceptor_tunnel_sent,
-        )
-    }
-
-    fn run_boosting(&self) -> bool {
-        self.status.interceptor_active
-            || self.status.windivert_active
-            || self.status.capture_active
-            || self.status.redirect_active
-    }
-
-    // ── Status DTO v2 assembly (W2-1 S3a) ──────────────────────────────────
-
     /// The one status snapshot the presentation layer will render.
     ///
     /// Assembled from the engine snapshot, the facts the app already derives for
@@ -2729,7 +2719,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// confirmed the single call at the frame's one-snapshot seam and removed
     /// the stale W2-1 `dead_code` allowance).
     fn app_status(&self) -> app_dto::AppStatus {
-        let boosting = self.run_boosting();
+        let boosting = self.status.any_data_plane_active();
         let server = self.game_server_addr();
         let relay = self.selected_entry().map(|entry| entry.addr);
         let has_error = self.engine_error().is_some();
@@ -2796,7 +2786,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 relay,
                 ranked: ranked.clone(),
                 server,
-                server_ping: server.and_then(|server| self.server_ping_for(server)),
+                server_ping: server.and_then(|server| ping_for_server(self.server_ping, server)),
                 server_leg: server_leg_state,
                 connecting: app_dto::connecting_fact(
                     self.status.connected,
@@ -3029,7 +3019,7 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// The relay-measured leg rows for the pair on screen.
     fn relay_measured_status(&self) -> app_dto::ServerLegStatus {
-        if !self.run_boosting() || self.holding {
+        if !self.status.any_data_plane_active() || self.holding {
             return app_dto::ServerLegStatus::default();
         }
         let Some(server) = self.game_server_addr() else {
@@ -4104,6 +4094,9 @@ impl<P: Platform> LightSpeedApp<P> {
 
     /// Start the redirect path for the server typed in Manual mode.
     fn start_manual_redirect(&mut self) {
+        // A manual redirect replaces automatic interception: close that diverting
+        // filter through the normal teardown instead of leaving both running.
+        self.stop_boost();
         let Some(server_addr) = parse_server_addr(&self.server_input) else {
             return;
         };
@@ -4300,10 +4293,15 @@ impl<P: Platform> LightSpeedApp<P> {
                                                 *lock_or_recover(&self.install_shared) = None;
                                                 self.update_check = UpdateCheckState::Installing;
                                                 let shared = Arc::clone(&self.install_shared);
+                                                let engine = Arc::clone(&self.engine);
                                                 std::thread::spawn(move || {
-                                                    let outcome = crate::self_update::install_blocking(
-                                                        asset,
-                                                    );
+                                                    // A self-update must never hard-kill an
+                                                    // active capture: full Stop + pin release
+                                                    // first, and an unclean stop refuses it.
+                                                    let outcome = match lock_or_recover(&engine).shutdown() {
+                                                        Ok(()) => crate::self_update::install_blocking(asset),
+                                                        Err(error) => Err(format!("cannot update: {error}")),
+                                                    };
                                                     *lock_or_recover(&shared) = Some(outcome);
                                                 });
                                             }
@@ -4416,7 +4414,11 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             match action {
                 TrayAction::Connect => self.connect_selected(),
                 TrayAction::Disconnect => {
-                    lock_or_recover(&self.engine).disconnect();
+                    // The tray has no route surface to stop the data plane from,
+                    // so the command does: a dropped control plane must never
+                    // leave a warm diverting filter behind.
+                    self.stop_boost();
+                    let _ = self.commands.disconnect();
                 }
             }
         }
