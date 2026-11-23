@@ -92,18 +92,17 @@ re-derive the incident from scratch.**
   merged (still 39 uncommitted entries on `9e8029b`).
 - **Merge + PR (2026-11-23).** The P0 work is committed (4 commits) on
   `feat/windivert-stability-p0`, merged with `origin/master` `f2e7bb0` (PR #226
-  a11y) and opened as **PR #228**; the merged tree's clean-build gate is green
-  (workspace **2,067 / 0 / 7**, GUI **254 / 0 / 1**, WinDivert
-  **1,724 / 0 / 9**, localization 4/4). Conflict resolutions: lifecycle init
-  stays in the real `new` (never `build`); merged GUI budgets `app.rs` 5566,
-  `presence.rs` 758, `route_surface.rs` 2570; both WAT sides kept.
+  a11y), and **landed on `master` via PR #228 (squash `01f0eed`, all CI green)**;
+  the merged tree's clean-build gate is green (workspace **2,067 / 0 / 7**, GUI
+  **254 / 0 / 1**, WinDivert **1,724 / 0 / 9**, localization 4/4). Conflict
+  resolutions: lifecycle init stays in the real `new` (never `build`); merged GUI
+  budgets `app.rs` 5566, `presence.rs` 758, `route_surface.rs` 2570; both WAT
+  sides kept.
 - **Next:** **P0-6 real rows need an owner-arranged clean boot (OD-6)**. Until
   they pass, no row is green, **no stability claim**, and 1.12.5 remains a
-  candidate. Before landing, commit the P0 WIP, merge/rebase `f2e7bb0`,
-  resolve the four files above, re-run the gate. No real-driver run, no GUI
-  launch, no commit/push/tag/publish.
-  Owner decisions 2026-11-23: OD-7 approved, OD-1 declined (R3 explicit
-  administrator-only), OD-6 harness-now/later-clean-boot.
+  candidate. The code is on `master`; no tag/publish was performed by this
+  round. Owner decisions 2026-11-23: OD-7 approved, OD-1 declined (R3
+  explicit administrator-only), OD-6 harness-now/later-clean-boot.
 
 ## What was observed (facts)
 
