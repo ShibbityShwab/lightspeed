@@ -271,3 +271,7 @@ connect = "Connect"
 disconnect = "Disconnect"
 quit = "Quit"
 starved = "relay is not returning your game traffic"
+
+[a11y]
+route_map = "World map of the relay fleet; active relay: {relay}. Locations are estimates, not measurements."
+remove_relay = "Remove relay"

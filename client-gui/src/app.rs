@@ -27,6 +27,7 @@ use crate::platform::{
 };
 use crate::processes::{self, ProcessEntry};
 use crate::update::UpdateStatus;
+use a11y::{automation, AccessKitResponse};
 use eframe::egui;
 use lightspeed_client::app::commands::AppCore;
 use lightspeed_client::app::dto as app_dto;
@@ -38,6 +39,8 @@ use lightspeed_client::profiles::{ProfileStore, UserGameProfile, UserServer};
 use lightspeed_client::{EngineStatus, LightSpeedEngine, RelayCandidate, PRIOR_UNCERTAINTY_US};
 use std::net::Ipv4Addr;
 
+pub(crate) mod a11y;
+mod a11y_dump;
 mod choice;
 mod editor;
 mod games;
@@ -70,6 +73,7 @@ use window::*;
 // `main.rs` reaches `install_fonts` and the window-height bounds through
 // `crate::app::…`, so the root has to re-export them instead of only importing
 // them privately.
+pub(crate) use a11y_dump::run as run_a11y_dump;
 pub(crate) use theme::install_fonts;
 pub(crate) use window::{MAX_WINDOW_HEIGHT, MIN_WINDOW_HEIGHT};
 
@@ -414,6 +418,9 @@ pub struct LightSpeedApp<P: Platform> {
     /// Once-per-Settings-open guard for the platform reconcile above, so the
     /// registry/file probe is not re-run on every frame the sheet is open.
     autostart_synced: bool,
+    /// True for the offline renderer: no platform probes, no writes, no
+    /// autostart reconcile. Presentation-only.
+    offline: bool,
     /// A failed enable/disable write, shown under the toggle instead of
     /// pretending the entry exists.
     autostart_error: Option<String>,
@@ -672,6 +679,9 @@ fn card_change(shown: Option<&CardFacts>, current: Option<&CardFacts>) -> Option
 }
 
 impl<P: Platform> LightSpeedApp<P> {
+    /// Build the app the way `main.rs` runs it: real tray, saved config,
+    /// background discovery/presence/watchdog, and an immediate reconnect to
+    /// the persisted relay.
     pub fn new(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
         // P0-1 lifecycle identity: open `lifecycle.jsonl` in the data directory
         // and emit the one `app_start` record, before the first frame. `init` is
@@ -686,6 +696,22 @@ impl<P: Platform> LightSpeedApp<P> {
             );
         }
 
+        Self::build(engine, quit, true)
+    }
+
+    /// A deterministic, side-effect-free app for headless UI rendering.
+    ///
+    /// Used by `lightspeed-gui --a11y-dump` and the accessibility tests: no
+    /// tray, no saved config, no relay/env overrides, no discovery, presence or
+    /// watchdog threads, and no control-plane connection. Only the window's
+    /// rendering path is exercised, so the accessibility tree is reproducible.
+    pub(super) fn new_offline(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag) -> Self {
+        Self::build(engine, quit, false)
+    }
+
+    /// The one constructor body: `background` selects the real runtime
+    /// (threads, network, saved state) or the offline rendering state.
+    fn build(engine: Arc<Mutex<LightSpeedEngine>>, quit: QuitFlag, background: bool) -> Self {
         let status = lock_or_recover(&engine).snapshot();
 
         // Detection is deliberately not run here: `new()` executes on the thread
@@ -694,15 +720,26 @@ impl<P: Platform> LightSpeedApp<P> {
         // as the first frame enables it, and `poll_game_presence` applies it.
         let auto_detected_game: Option<String> = None;
 
-        let is_admin = P::is_admin();
+        let is_admin = background && P::is_admin();
 
-        let loaded = config::load_unified(&paths::config_paths());
-        // Keep the tolerant loader's diagnostic: the status DTO turns it into
-        // the localized settings-error sentence instead of looking like a fresh
-        // install. Only an unusable existing file produces one; a first run is
-        // not an error.
-        let config_recovery = loaded.recovery;
-        let saved = loaded.config;
+        let (saved, config_recovery) = if background {
+            let loaded = config::load_unified(&paths::config_paths());
+            // Keep the tolerant loader's diagnostic: the status DTO turns it into
+            // the localized settings-error sentence instead of looking like a fresh
+            // install. Only an unusable existing file produces one; a first run is
+            // not an error.
+            (loaded.config, loaded.recovery)
+        } else {
+            // English anchors the automation contract's names; every other locale
+            // is a translation of the same keys.
+            (
+                AppConfig {
+                    language: Some("en".to_string()),
+                    ..AppConfig::default()
+                },
+                None,
+            )
+        };
         // Apply the persisted path-MTU cap before any boost can start; the data
         // plane also lowers it on an EMSGSIZE rejection, so this is the user's
         // explicit floor rather than the only protection. It is a command, so a
@@ -731,7 +768,7 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         // A pinned key that is not a built-in is one of the user's profiles, so
         // it stays pinned even though the built-in lookup above fell back to 0.
-        let selected_custom = if game_auto || game_manual {
+        let selected_custom = if !background || game_auto || game_manual {
             None
         } else {
             saved
@@ -742,9 +779,11 @@ impl<P: Platform> LightSpeedApp<P> {
                 .map(str::to_string)
         };
         let mut proxies = saved.proxies.clone();
-        for entry in env_proxies() {
-            if !proxies.iter().any(|existing| existing.addr == entry.addr) {
-                proxies.push(entry);
+        if background {
+            for entry in env_proxies() {
+                if !proxies.iter().any(|existing| existing.addr == entry.addr) {
+                    proxies.push(entry);
+                }
             }
         }
         let selected_proxy_idx = saved
@@ -766,12 +805,20 @@ impl<P: Platform> LightSpeedApp<P> {
         // The tray is created **after** the language is pinned: its menu labels
         // and tooltip are catalogued copy (`tray.*`/`state.*`), so building it
         // earlier would leave English labels behind a German config (W2-4 (c)).
-        let tray = P::new_tray(Arc::clone(&quit));
+        let tray = if background {
+            P::new_tray(Arc::clone(&quit))
+        } else {
+            None
+        };
         tracing::info!("system tray created: {}", tray.is_some());
 
         // One OS read for the whole process: the reduced-motion signal gates
         // every spinner (W2-4 (i)). A failed probe is `Unknown` = static.
-        let animations = P::animations();
+        let animations = if background {
+            P::animations()
+        } else {
+            Animations::Unknown
+        };
         tracing::info!(
             "reduced-motion signal: {:?} ({})",
             animations,
@@ -788,12 +835,16 @@ impl<P: Platform> LightSpeedApp<P> {
         // no estimator is installed, and the only installer was the CLI's probe
         // path - so in the GUI the whole-loop figure and the measured server legs
         // for relay ranking were both empty. Install it before traffic can arrive.
-        lightspeed_client::ensure_destination_estimator();
-        spawn_relay_reply_watchdog(
-            Arc::clone(&engine),
-            Arc::clone(&quit),
-            Arc::clone(&watchdog_publication),
-        );
+        // Offline rendering starts no watchdog and no sampler: there is no
+        // traffic to see, and the renderer must stay side-effect-free.
+        if background {
+            lightspeed_client::ensure_destination_estimator();
+            spawn_relay_reply_watchdog(
+                Arc::clone(&engine),
+                Arc::clone(&quit),
+                Arc::clone(&watchdog_publication),
+            );
+        }
         let mut app = Self {
             engine,
             status,
@@ -821,12 +872,18 @@ impl<P: Platform> LightSpeedApp<P> {
             server_ping: None,
             ping_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             compared_at: None,
-            relay_history: crate::relay_history::RelayHistory::load(
-                &crate::paths::relay_history_file(),
-            ),
+            relay_history: if background {
+                crate::relay_history::RelayHistory::load(&crate::paths::relay_history_file())
+            } else {
+                crate::relay_history::RelayHistory::default()
+            },
             history_counters: None,
             history_saved_at: None,
-            presence: GamePresence::spawn(),
+            presence: if background {
+                GamePresence::spawn()
+            } else {
+                GamePresence::idle()
+            },
             auto_game_present: false,
             auto_started_for_presence: false,
             ui_word: WordTracker::default(),
@@ -847,20 +904,24 @@ impl<P: Platform> LightSpeedApp<P> {
             game_manual,
             server_input: saved.manual_server.clone(),
             fec_enabled: false,
-            capture_available: P::is_capture_available(),
+            capture_available: background && P::is_capture_available(),
             share_latency_stats,
             auto_detected_game,
             is_admin,
             animations,
             elevation: None,
-            elevation_notice: capture_elevation_notice(),
+            elevation_notice: if background {
+                capture_elevation_notice()
+            } else {
+                None
+            },
             fonts_setup: false,
             header_icon: None,
-            details_open: capture_flag("LIGHTSPEED_OPEN_DETAILS"),
+            details_open: background && capture_flag("LIGHTSPEED_OPEN_DETAILS"),
             height_restored: false,
             persisted_height: 0.0,
-            show_settings: std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
-            show_game_editor: capture_flag("LIGHTSPEED_OPEN_EDITOR"),
+            show_settings: background && std::env::var_os("LIGHTSPEED_OPEN_SETTINGS").is_some(),
+            show_game_editor: background && capture_flag("LIGHTSPEED_OPEN_EDITOR"),
             game_editor: GameEditorDraft::new_profile(),
             editor_saved: None,
             editor_error: None,
@@ -869,14 +930,17 @@ impl<P: Platform> LightSpeedApp<P> {
             process_search: String::new(),
             selected_custom,
             target_process: None,
-            show_target_picker: capture_flag("LIGHTSPEED_OPEN_PICKER"),
+            show_target_picker: background && capture_flag("LIGHTSPEED_OPEN_PICKER"),
             save_server_name: String::new(),
             server_saved: None,
             server_error: None,
             language,
             tunnel_mtu,
             autostart: saved.autostart,
-            autostart_synced: false,
+            // Offline rendering never reads (or reconciles) the OS autostart
+            // entry: the dump must be a pure render with no host side effects.
+            autostart_synced: !background,
+            offline: !background,
             autostart_error: None,
             boost_start: None,
             health_base: None,
@@ -887,10 +951,18 @@ impl<P: Platform> LightSpeedApp<P> {
             update_shared: Arc::new(Mutex::new(None)),
             install_shared: Arc::new(Mutex::new(None)),
             proxies,
-            discovery: DiscoveryState::InFlight(discovery::spawn_discovery()),
+            discovery: if background {
+                DiscoveryState::InFlight(discovery::spawn_discovery())
+            } else {
+                DiscoveryState::Done
+            },
             discovery_error: None,
             health: None,
         };
+
+        if !background {
+            return app;
+        }
 
         if std::env::var_os("LIGHTSPEED_OPEN_UPDATE").is_some() {
             app.start_update_check();
@@ -922,6 +994,38 @@ impl<P: Platform> LightSpeedApp<P> {
         self.selected_entry().map(|entry| entry.addr)
     }
 
+    /// User game profiles for the view.
+    ///
+    /// The offline renderer never reads the machine's profile store: the
+    /// `--a11y-dump` tree is a UI schema, not user data, and two runs must
+    /// describe the same control set on any host.
+    fn view_user_profiles(&self) -> Vec<UserGameProfile> {
+        if self.offline {
+            Vec::new()
+        } else {
+            user_profiles()
+        }
+    }
+
+    /// User servers for the Manual flow; empty offline for the same reason.
+    fn view_user_servers(&self) -> Vec<UserServer> {
+        if self.offline {
+            Vec::new()
+        } else {
+            user_servers()
+        }
+    }
+
+    /// User game keys (profile validation); empty offline.
+    fn view_user_game_keys(&self) -> Vec<String> {
+        if self.offline {
+            Vec::new()
+        } else {
+            user_game_keys()
+        }
+    }
+
+    /// The pinned game: a user profile when one is selected, else the built-i
     /// The pinned game: a user profile when one is selected, else the built-in
     /// at [`Self::selected_game_idx`].
     ///
@@ -929,7 +1033,8 @@ impl<P: Platform> LightSpeedApp<P> {
     /// a `&'static` registry table.
     fn selected_game(&self) -> PickedGame {
         if let Some(key) = &self.selected_custom {
-            if let Some(profile) = user_profiles()
+            if let Some(profile) = self
+                .view_user_profiles()
                 .into_iter()
                 .find(|profile| profile.key == *key)
             {
@@ -2525,7 +2630,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 0.0;
                 // Hero: the 30 px capped mono state word, one line, no shrink.
-                let (hero, _) = ui.allocate_exact_size(
+                let (hero, hero_response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), HERO_H),
                     egui::Sense::hover(),
                 );
@@ -2541,6 +2646,12 @@ impl<P: Platform> LightSpeedApp<P> {
                         TRACK_STATE,
                     );
                 }
+                // The instrument's one state expression, as a polite live
+                // region: a screen reader hears the route transition.
+                hero_response
+                    .a11y_text(word.clone())
+                    .a11y_automation_id(automation::STATE_WORD)
+                    .a11y_live(egui::accesskit::Live::Polite, true);
                 if compact {
                     ui.add_space(S1);
                 } else {
@@ -2549,7 +2660,7 @@ impl<P: Platform> LightSpeedApp<P> {
                 // Readout: prose sub-line left, ice relay-leg metric right with
                 // its unit and leg caption (F1-safe; the metric is its own row).
                 let readout_h = if compact { 34.0 } else { 46.0 };
-                let (readout, _) = ui.allocate_exact_size(
+                let (readout, readout_response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), readout_h),
                     egui::Sense::hover(),
                 );
@@ -2621,6 +2732,33 @@ impl<P: Platform> LightSpeedApp<P> {
                         );
                     }
                 }
+                // Readout as two nodes: the prose detail and the metric are
+                // different facts (a caption + a measurement), and automation
+                // targets the number by its own id.
+                let detail_text = surface
+                    .subline
+                    .as_ref()
+                    .map(|line| self.line_text(line))
+                    .unwrap_or_default();
+                readout_response
+                    .a11y_text(detail_text)
+                    .a11y_automation_id(automation::STATE_DETAIL);
+                let caption_text = i18n::t(surface.metric.caption_key).to_uppercase();
+                let metric_text = match surface.metric.value_ms {
+                    Some(ms) => format!("{ms} MS {caption_text}"),
+                    None => format!("-- MS {caption_text}"),
+                };
+                let metric_rect = egui::Rect::from_min_max(
+                    egui::pos2((readout.right() - 140.0).max(readout.left()), readout.top()),
+                    readout.max,
+                );
+                ui.interact(
+                    metric_rect,
+                    ui.scope_id().with("a11y_metric"),
+                    egui::Sense::hover(),
+                )
+                .a11y_text(metric_text)
+                .a11y_automation_id(automation::ROUND_TRIP);
                 if !compact {
                     ui.add_space(S2);
                 }
@@ -2662,11 +2800,20 @@ impl<P: Platform> LightSpeedApp<P> {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let markers = self.map_markers();
+                // The map is a canvas; its description names the one fact a
+                // screen reader can use (which relay is active), not the dots.
+                let relay_name = self
+                    .selected_entry()
+                    .map(|entry| entry.label.clone())
+                    .unwrap_or_else(|| i18n::t("action_reason.missing_relay").into_owned());
+                let map_description =
+                    i18n::t_with("a11y.route_map", &[("relay", relay_name.as_str())]);
                 globe::draw_telemetry_map(
                     ui,
                     ui.available_width(),
                     if compact { MAP_H_COMPACT } else { MAP_H },
                     &markers,
+                    &map_description,
                 );
                 ui.add_space(S1);
                 self.shell_ledger(ui, surface);
@@ -2677,7 +2824,8 @@ impl<P: Platform> LightSpeedApp<P> {
                         || location.detail.is_some()
                         || location.note.is_some()
                         || location.as_is.is_some();
-                    console_row(ui, &label, &value, text_2, VALUE, false, has_hint);
+                    console_row(ui, &label, &value, text_2, VALUE, false, has_hint)
+                        .a11y_automation_id(automation::LOCATION_ROW);
                     for extra in [&location.detail, &location.note].into_iter().flatten() {
                         let text = self.row_plain_text(extra);
                         prose_label(ui, &text, PROSE, text_3);
@@ -2752,9 +2900,10 @@ impl<P: Platform> LightSpeedApp<P> {
             egui::vec2(ui.available_width(), HIT_MIN),
             egui::Sense::click(),
         );
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, self.details_open, &label)
-        });
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        let response = response
+            .a11y_automation_id(automation::ROUTE_DETAILS)
+            .a11y_disclosure(self.details_open);
         if response.hovered() {
             ui.painter()
                 .rect_filled(rect, egui::CornerRadius::same(R_TAG), bg_2);
@@ -2781,7 +2930,9 @@ impl<P: Platform> LightSpeedApp<P> {
             egui::Stroke::new(1.5, text_3),
         ));
         focus_ring(ui, &response, R_TAG);
-        if activated(ui, &response) {
+        if let Some(requested) = a11y::disclosure_action(ui, response.id) {
+            self.details_open = requested;
+        } else if activated(ui, &response) {
             self.details_open = !self.details_open;
         }
         if self.details_open {
@@ -2815,13 +2966,14 @@ impl<P: Platform> LightSpeedApp<P> {
             .size()
             .x;
         let word_count = label_raw.split_whitespace().count();
+        let row_id = format!("{}{}", automation::ROUTE_ROW, row.label_key);
         if word_count > 3 && label_w > width * 0.45 {
             let detail = if matches!(row.value, RowValue::Hint(_)) {
                 None
             } else {
                 Some(value_text.as_str())
             };
-            console_sentence_row(ui, &label_raw, detail, draw_rule);
+            console_sentence_row(ui, &label_raw, detail, draw_rule).a11y_automation_id(&row_id);
             return;
         }
         if !row_fits(label_w, value_w, width) {
@@ -2829,8 +2981,11 @@ impl<P: Platform> LightSpeedApp<P> {
                 .painter()
                 .layout(value_text.clone(), value_font, ink, width);
             let height = 16.0 + S1 + value_galley.size().y + S1;
-            let (rect, _) =
+            let (rect, response) =
                 ui.allocate_exact_size(egui::vec2(width, height.max(ROW_H)), egui::Sense::hover());
+            response
+                .a11y_text(format!("{label_raw}: {value_text}"))
+                .a11y_automation_id(&row_id);
             let painter = ui.painter();
             paint_tracked(
                 painter,
@@ -2857,7 +3012,8 @@ impl<P: Platform> LightSpeedApp<P> {
             }
             return;
         }
-        console_row(ui, &label, &value_text, ink, size, mono, draw_rule);
+        console_row(ui, &label, &value_text, ink, size, mono, draw_rule)
+            .a11y_automation_id(&row_id);
     }
 
     /// The rendered text, type and ink of a row value (Direction C: data is
@@ -2884,7 +3040,12 @@ impl<P: Platform> LightSpeedApp<P> {
             .and_then(|error| error.detail.clone())
             .unwrap_or_default();
         let tag = i18n::t("state.error").to_uppercase();
-        notice_frame(ui, true, |ui| {
+        let mut error_text = tag.clone();
+        if let Some(subline) = &surface.subline {
+            error_text.push(' ');
+            error_text.push_str(&self.line_text(subline));
+        }
+        let error_panel = notice_frame(ui, true, |ui| {
             tracked_label(ui, &tag, CAPTION, danger, TRACK_TAG);
             if let Some(subline) = &surface.subline {
                 ui.add_space(S1);
@@ -2892,9 +3053,15 @@ impl<P: Platform> LightSpeedApp<P> {
                 prose_label(ui, &text, PROSE, danger_text);
             }
             let mut open = self.details_open;
-            if disclosure_row(ui, i18n::t("route.details").as_ref(), &mut open) {
-                self.details_open = !self.details_open;
-            }
+            disclosure_row(
+                ui,
+                i18n::t("route.details").as_ref(),
+                &mut open,
+                Some(automation::ERROR_DETAILS),
+            );
+            // One source for the disclosure state: the helper already applied
+            // the click, keyboard or AccessKit Expand/Collapse request.
+            self.details_open = open;
             if self.details_open && !detail.is_empty() {
                 prose_label(ui, &detail, PROSE, text_2);
             }
@@ -2904,6 +3071,10 @@ impl<P: Platform> LightSpeedApp<P> {
                 self.reveal_log_file();
             }
         });
+        // A fault is assertive: a screen reader must hear it when it appears.
+        error_panel
+            .a11y_alert(error_text)
+            .a11y_automation_id(automation::ERROR_PANEL);
     }
 
     /// The one action slot + the disabled-reason line under it when the slot
@@ -2927,7 +3098,8 @@ impl<P: Platform> LightSpeedApp<P> {
                 egui::RichText::new(self.line_text(reason))
                     .size(CAPTION)
                     .color(text_3),
-            );
+            )
+            .a11y_automation_id(automation::ACTION_REASON);
         }
     }
     /// Map the one slot to the session command (the shell changes no route
@@ -3436,7 +3608,8 @@ impl<P: Platform> LightSpeedApp<P> {
             self.boost_server_combo(ui)
         });
         if self.status.connected {
-            let disconnect = console_link(ui, i18n::t("action.disconnect").as_ref());
+            let disconnect = console_link(ui, i18n::t("action.disconnect").as_ref())
+                .a11y_automation_id(automation::RELAY_DISCONNECT);
             if activated(ui, &disconnect) {
                 self.toggle_relay_connection();
             }
@@ -3450,7 +3623,11 @@ impl<P: Platform> LightSpeedApp<P> {
                             .color(warn),
                     )
                     .on_hover_text(err);
-                    if ui.link(i18n::t("relay.retry")).clicked() {
+                    if ui
+                        .link(i18n::t("relay.retry"))
+                        .a11y_automation_id(automation::RELAY_RETRY)
+                        .clicked()
+                    {
                         self.start_discovery();
                     }
                 });
@@ -3471,7 +3648,9 @@ impl<P: Platform> LightSpeedApp<P> {
                     egui::RichText::new(detected.clone())
                         .size(CAPTION)
                         .color(text_1),
-                );
+                )
+                .a11y_automation_id(automation::GAME_DETECTED)
+                .a11y_live(egui::accesskit::Live::Polite, true);
             });
         } else if let Some(key) = game_caption(
             self.game_auto,
@@ -3536,7 +3715,11 @@ impl<P: Platform> LightSpeedApp<P> {
                             .on_hover_text(self.discovery_error.clone().unwrap_or_else(|| {
                                 "The relay registry returned no usable relays.".to_string()
                             }));
-                        if ui.link(i18n::t("relay.retry")).clicked() {
+                        if ui
+                            .link(i18n::t("relay.retry"))
+                            .a11y_automation_id(automation::RELAY_RETRY)
+                            .clicked()
+                        {
                             self.start_discovery();
                         }
                     });
@@ -3555,7 +3738,7 @@ impl<P: Platform> LightSpeedApp<P> {
         let mut auto = self.auto_select;
         let mut chosen: Option<usize> = None;
 
-        egui::ComboBox::from_id_salt("boost_server_select")
+        let relay_combo = egui::ComboBox::from_id_salt("boost_server_select")
             .selected_text(current)
             .width(width)
             .show_ui(ui, |ui| {
@@ -3597,6 +3780,9 @@ impl<P: Platform> LightSpeedApp<P> {
                 "Auto uses the lowest-latency relay and reacts as new ones \
                  appear. Picking one by name pins it instead.",
             );
+        relay_combo
+            .accessible_name(i18n::t("route.relay"))
+            .a11y_automation_id(automation::RELAY_SELECT);
 
         if auto != self.auto_select {
             self.auto_select = auto;
@@ -3628,7 +3814,7 @@ impl<P: Platform> LightSpeedApp<P> {
     /// user's own profiles under "My games", and the way into the editor.
     fn game_combo(&mut self, ui: &mut egui::Ui) {
         let width = ui.available_width();
-        let user_games = user_profiles();
+        let user_games = self.view_user_profiles();
         let label = if self.game_manual {
             i18n::t("game.manual_server").into_owned()
         } else if self.game_auto {
@@ -3641,7 +3827,7 @@ impl<P: Platform> LightSpeedApp<P> {
         };
         let mut changed = false;
         let mut open_editor = false;
-        egui::ComboBox::from_id_salt("game_select")
+        let game_combo = egui::ComboBox::from_id_salt("game_select")
             .selected_text(label)
             .width(width)
             .show_ui(ui, |ui| {
@@ -3715,6 +3901,10 @@ impl<P: Platform> LightSpeedApp<P> {
                     }
                 }
             });
+        game_combo
+            .response
+            .accessible_name(i18n::t("route.game"))
+            .a11y_automation_id(automation::GAME_SELECT);
         if changed {
             self.persist_config();
         }
@@ -3773,11 +3963,14 @@ impl<P: Platform> LightSpeedApp<P> {
             let field_w =
                 (ui.max_rect().right() - label.rect.right() - ui.spacing().item_spacing.x - 2.0)
                     .max(80.0);
-            let edit = ui.add(
-                egui::TextEdit::singleline(&mut self.server_input)
-                    .hint_text(format!("e.g. 123.45.67.89:{default_port}"))
-                    .desired_width(field_w),
-            );
+            let edit = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.server_input)
+                        .hint_text(format!("e.g. 123.45.67.89:{default_port}"))
+                        .desired_width(field_w),
+                )
+                .accessible_name(i18n::t("route.server_label"))
+                .a11y_automation_id(automation::MANUAL_SERVER);
             // Written as it is typed, so the address is still here after a
             // restart even if the window is hidden to the tray rather than
             // closed, which is the only way the app is normally left.
@@ -3787,7 +3980,7 @@ impl<P: Platform> LightSpeedApp<P> {
         });
 
         // Saved servers: a preset fills the address above and the range below.
-        let servers = user_servers();
+        let servers = self.view_user_servers();
         if !servers.is_empty() {
             ui.add_space(S2);
             ui.horizontal(|ui| {
@@ -3797,7 +3990,7 @@ impl<P: Platform> LightSpeedApp<P> {
                     .position(|server| server.address == self.server_input.trim())
                     .map(|i| servers[i].name.clone())
                     .unwrap_or_else(|| i18n::t("servers.none").into_owned());
-                egui::ComboBox::from_id_salt("saved_server_select")
+                let saved_servers = egui::ComboBox::from_id_salt("saved_server_select")
                     .selected_text(current)
                     .width((ui.available_width() - 8.0).max(80.0))
                     .show_ui(ui, |ui| {
@@ -3808,6 +4001,10 @@ impl<P: Platform> LightSpeedApp<P> {
                             }
                         }
                     });
+                saved_servers
+                    .response
+                    .accessible_name(i18n::t("servers.saved"))
+                    .a11y_automation_id(automation::MANUAL_SAVED_SERVERS);
             });
         }
         ui.add_space(S2);
@@ -3853,6 +4050,8 @@ impl<P: Platform> LightSpeedApp<P> {
                     .max(80.0),
                 !port_valid,
             )
+            .accessible_name(i18n::t("route.custom_port_range"))
+            .a11y_automation_id(automation::MANUAL_PORT_RANGE)
             .changed()
             {
                 self.persist_config();
@@ -3869,7 +4068,11 @@ impl<P: Platform> LightSpeedApp<P> {
             // a guessed reserve for the button was 18 px short in this locale, so
             // the row pushed the card past the window edge.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(i18n::t("servers.save")).clicked() {
+                if ui
+                    .button(i18n::t("servers.save"))
+                    .a11y_automation_id(automation::MANUAL_SAVE)
+                    .clicked()
+                {
                     save_server = true;
                 }
                 let field_w = (ui.available_width() - ui.spacing().item_spacing.x).max(80.0);
@@ -3877,7 +4080,9 @@ impl<P: Platform> LightSpeedApp<P> {
                     egui::TextEdit::singleline(&mut self.save_server_name)
                         .hint_text(i18n::t("servers.save_name_hint"))
                         .desired_width(field_w),
-                );
+                )
+                .accessible_name(i18n::t("servers.save_as"))
+                .a11y_automation_id(automation::MANUAL_SAVE_NAME);
             });
         });
         if let Some(saved) = &self.server_saved {
@@ -3956,10 +4161,13 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_width(max_w);
-                let (head, _) = ui.allocate_exact_size(
+                let (head, head_response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 24.0),
                     egui::Sense::hover(),
                 );
+                head_response
+                    .a11y_text(i18n::t("settings.title").to_uppercase())
+                    .a11y_automation_id(automation::SETTINGS_SHEET);
                 {
                     let painter = ui.painter();
                     let font = egui::FontId::new(TITLE, console());
@@ -3998,6 +4206,8 @@ impl<P: Platform> LightSpeedApp<P> {
                         i18n::t("action.close").as_ref(),
                     )
                 });
+                let close_response =
+                    close_response.a11y_automation_id(automation::SETTINGS_BUTTON_CLOSE);
                 if close_response.hovered() {
                     ui.painter()
                         .rect_filled(close_rect, egui::CornerRadius::same(R_TAG), bg_2);
@@ -4094,6 +4304,10 @@ impl<P: Platform> LightSpeedApp<P> {
                     }
                 });
             focus_ring(ui, &combo.response, R_TAG);
+            combo
+                .response
+                .accessible_name(i18n::t("settings.language"))
+                .a11y_automation_id(automation::SETTINGS_LANGUAGE);
         });
         ui.add_space(S2);
 
@@ -4157,7 +4371,8 @@ impl<P: Platform> LightSpeedApp<P> {
             ui,
             &i18n::t("settings.share_stats"),
             self.share_latency_stats,
-        );
+        )
+        .a11y_automation_id(automation::SETTINGS_SHARE_STATS);
         if toggle.changed() {
             self.share_latency_stats = !self.share_latency_stats;
             self.persist_config();
@@ -4198,11 +4413,13 @@ impl<P: Platform> LightSpeedApp<P> {
         );
         self.proxy_manager_body(ui);
         ui.horizontal_wrapped(|ui| {
-            let remeasure = console_link(ui, i18n::t("settings.remeasure").as_ref());
+            let remeasure = console_link(ui, i18n::t("settings.remeasure").as_ref())
+                .a11y_automation_id(automation::SETTINGS_REMEASURE);
             if activated(ui, &remeasure) {
                 self.start_relay_measurement();
             }
-            let refresh = console_link(ui, i18n::t("proxies.refresh").as_ref());
+            let refresh = console_link(ui, i18n::t("proxies.refresh").as_ref())
+                .a11y_automation_id(automation::SETTINGS_REFRESH_RELAYS);
             if activated(ui, &refresh) {
                 self.start_discovery();
             }
@@ -4217,11 +4434,13 @@ impl<P: Platform> LightSpeedApp<P> {
             None,
         );
         ui.horizontal_wrapped(|ui| {
-            let updates = console_link(ui, i18n::t("update.sheet_title").as_ref());
+            let updates = console_link(ui, i18n::t("update.sheet_title").as_ref())
+                .a11y_automation_id(automation::SETTINGS_CHECK_UPDATES);
             if activated(ui, &updates) {
                 self.start_update_check();
             }
-            let open_log = console_link(ui, i18n::t("settings.open_log").as_ref());
+            let open_log = console_link(ui, i18n::t("settings.open_log").as_ref())
+                .a11y_automation_id(automation::SETTINGS_LOG);
             if activated(ui, &open_log) {
                 self.reveal_log_file();
             }
@@ -4266,7 +4485,8 @@ impl<P: Platform> LightSpeedApp<P> {
         );
         ui.horizontal(|ui| {
             if let Some(mark) = self.header_icon.as_ref() {
-                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(24.0, 24.0)));
+                ui.add(egui::Image::from_texture(mark).fit_to_exact_size(egui::vec2(24.0, 24.0)))
+                    .a11y_hidden();
             }
             ui.vertical(|ui| {
                 tracked_label(ui, "LIGHTSPEED", BRAND, text_2, TRACK_BRAND);
@@ -4300,8 +4520,8 @@ impl<P: Platform> LightSpeedApp<P> {
         let (max_w, max_h) = sheet_bounds(ctx);
         let mut close = false;
         let mut actions = EditorActions::default();
-        let user_games = user_profiles();
-        let user_keys = user_game_keys();
+        let user_games = self.view_user_profiles();
+        let user_keys = self.view_user_game_keys();
         let editing_key = self
             .game_editor
             .editing
@@ -4314,7 +4534,8 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_width(max_w);
-                sheet_title(ui, &i18n::t("game.editor_title"));
+                sheet_title(ui, &i18n::t("game.editor_title"))
+                    .a11y_automation_id(automation::EDITOR_SHEET);
                 egui::ScrollArea::vertical()
                     .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
@@ -4334,7 +4555,11 @@ impl<P: Platform> LightSpeedApp<P> {
                         );
                     });
                 ui.add_space(S2);
-                if ui.button(i18n::t("action.close").as_ref()).clicked() {
+                if ui
+                    .button(i18n::t("action.close").as_ref())
+                    .a11y_automation_id(automation::EDITOR_BUTTON_CLOSE)
+                    .clicked()
+                {
                     close = true;
                 }
             });
@@ -4423,7 +4648,8 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_width(max_w);
-                sheet_title(ui, &i18n::t("game.target_process"));
+                sheet_title(ui, &i18n::t("game.target_process"))
+                    .a11y_automation_id(automation::PICKER_SHEET);
                 prose_label(ui, &i18n::t("game.target_process_hint"), PROSE, text_3);
                 let (rule, _) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 1.0),
@@ -4460,7 +4686,8 @@ impl<P: Platform> LightSpeedApp<P> {
                             clear = true;
                         }
                     }
-                    let close_link = console_link(ui, i18n::t("action.close").as_ref());
+                    let close_link = console_link(ui, i18n::t("action.close").as_ref())
+                        .a11y_automation_id(automation::PICKER_BUTTON_CLOSE);
                     if activated(ui, &close_link) {
                         close = true;
                     }
@@ -4530,7 +4757,11 @@ impl<P: Platform> LightSpeedApp<P> {
                         egui::Label::new(egui::RichText::new(&entry.label).color(text_1))
                             .truncate(),
                     );
-                    if ui.add(egui::Button::new("×").frame(false)).clicked() {
+                    if ui
+                        .add(egui::Button::new("×").frame(false))
+                        .accessible_name(i18n::t("a11y.remove_relay"))
+                        .clicked()
+                    {
                         remove_idx = Some(i);
                     }
                 },
@@ -4563,14 +4794,21 @@ impl<P: Platform> LightSpeedApp<P> {
         ui.add_space(S2);
         ui.horizontal(|ui| {
             ui.label(i18n::t("proxies.label_field"));
-            ui.text_edit_singleline(&mut self.manager_label_input);
+            ui.text_edit_singleline(&mut self.manager_label_input)
+                .accessible_name(i18n::t("proxies.label_field"))
+                .a11y_automation_id(automation::SETTINGS_PROXY_LABEL);
         });
         ui.horizontal(|ui| {
             ui.label(i18n::t("proxies.addr_field"));
-            ui.text_edit_singleline(&mut self.manager_addr_input);
+            ui.text_edit_singleline(&mut self.manager_addr_input)
+                .accessible_name(i18n::t("proxies.addr_field"))
+                .a11y_automation_id(automation::SETTINGS_PROXY_ADDR);
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button(i18n::t("proxies.add")).clicked()
+            if ui
+                .button(i18n::t("proxies.add"))
+                .a11y_automation_id(automation::SETTINGS_PROXY_ADD)
+                .clicked()
                 && self.manager_addr_input.parse::<SocketAddrV4>().is_ok()
             {
                 add_addr = Some(self.manager_addr_input.parse().unwrap());
@@ -4578,7 +4816,11 @@ impl<P: Platform> LightSpeedApp<P> {
             if ui.button(i18n::t("proxies.open_config")).clicked() {
                 paths::open_in_os(&paths::config_dir());
             }
-            if ui.button(i18n::t("proxies.reset_defaults")).clicked() {
+            if ui
+                .button(i18n::t("proxies.reset_defaults"))
+                .a11y_automation_id(automation::SETTINGS_PROXY_RESET)
+                .clicked()
+            {
                 reset = true;
             }
         });
@@ -4625,7 +4867,7 @@ impl<P: Platform> LightSpeedApp<P> {
             .frame(sheet_frame())
             .show(ctx, |ui| {
                 ui.set_width(max_w);
-                sheet_title(ui, &i18n::t("update.sheet_title"));
+                sheet_title(ui, &i18n::t("update.sheet_title")).a11y_automation_id(automation::UPDATE_SHEET);
                 egui::ScrollArea::vertical()
                     .max_height((max_h - 190.0).max(160.0))
                     .show(ui, |ui| {
@@ -4675,6 +4917,7 @@ impl<P: Platform> LightSpeedApp<P> {
                                     ui.add_space(S1);
                                     if ui
                                         .button(i18n::t("update.install").as_ref())
+                                        .a11y_automation_id(automation::UPDATE_BUTTON_INSTALL)
                                         .on_hover_text(i18n::t("update.install_hint"))
                                         .clicked()
                                     {
@@ -4733,7 +4976,8 @@ impl<P: Platform> LightSpeedApp<P> {
                         }
                     });
                 ui.add_space(S2);
-                let close = console_link(ui, i18n::t("action.close").as_ref());
+                let close = console_link(ui, i18n::t("action.close").as_ref())
+        .a11y_automation_id(automation::UPDATE_BUTTON_CLOSE);
                 if activated(ui, &close) {
                     self.show_update_dialog = false;
                     self.update_check = UpdateCheckState::Idle;
@@ -4762,26 +5006,40 @@ fn update_disclosure(ui: &mut egui::Ui) {
 
 impl<P: Platform> eframe::App for LightSpeedApp<P> {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        // The full window rect, read before any panel claims space, drives the
-        // tier breakpoints (spec §1.4: normal ≥560, short <560, compact <480).
         let viewport = ui.available_rect_before_wrap();
-        // Where the window sits on its monitor, for the auto-size cap below.
-        let (monitor_height, window_top) = monitor_geometry(frame, &ctx);
+        let geometry = WindowGeometry::from_frame(frame, ui.ctx());
+        self.pre_frame(ui.ctx(), viewport);
+        self.render_ui(ui, geometry);
+    }
+}
 
-        // One-time first-frame setup: platform-specific fonts and the
-        // branded header mark texture.
-        if !self.fonts_setup {
-            self.fonts_setup = true;
-            apply_theme(&ctx);
-            P::setup_fonts(&ctx);
-            // `main.rs` binds the families before the first frame, when the
-            // language is not resolved yet; re-bind now that it is, so the CJK
-            // faces are ordered for the active locale rather than defaulted.
-            install_fonts(&ctx, Some(&i18n::current()));
-            self.header_icon = brand_mark_texture(&ctx);
+/// The window-shell geometry the renderer needs, detached from eframe so the
+/// same UI can be rendered with no window at all (tests and `--a11y-dump`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct WindowGeometry {
+    /// The current monitor's height in points, when known.
+    pub(super) monitor_height: Option<f32>,
+    /// The client area's top edge on that monitor, in points, when known.
+    pub(super) window_top: Option<f32>,
+}
+
+impl WindowGeometry {
+    /// Read the geometry from the live eframe window.
+    fn from_frame(frame: &eframe::Frame, ctx: &egui::Context) -> Self {
+        let (monitor_height, window_top) = monitor_geometry(frame, ctx);
+        Self {
+            monitor_height,
+            window_top,
         }
+    }
+}
 
+impl<P: Platform> LightSpeedApp<P> {
+    /// The per-frame work that is not painting: close handling, tray events,
+    /// app shortcuts, engine/discovery/health polls and update collection.
+    /// Split from [`Self::render_ui`] so the accessibility surface can be
+    /// rendered headlessly without starting network polls or a tray.
+    fn pre_frame(&mut self, ctx: &egui::Context, viewport: egui::Rect) {
         // Tray Quit and the window X are deliberately different: Quit tears
         // the process down, X hides to the tray where a real tray exists.
         let close_requested = ctx.input(|i| i.viewport().close_requested());
@@ -4816,7 +5074,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
 
         // ── Poll tray events ─────────────────────────────────────────────
         let tray_actions = match &self.tray {
-            Some(tray) => tray.poll_events(&ctx),
+            Some(tray) => tray.poll_events(ctx),
             None => Vec::new(),
         };
         for action in tray_actions {
@@ -4839,7 +5097,7 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // window) and under automation's `LIGHTSPEED_KEEP_VISIBLE` pin.
         let can_hide =
             self.tray_available() && std::env::var_os("LIGHTSPEED_KEEP_VISIBLE").is_none();
-        match shortcut_effect(take_app_shortcut(&ctx), can_hide) {
+        match shortcut_effect(take_app_shortcut(ctx), can_hide) {
             ShortcutEffect::Quit => {
                 tracing::info!("Ctrl+Q: quitting from the canonical shortcut table");
                 save_window_height(viewport.height());
@@ -4888,6 +5146,27 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
             if let Some(Err(err)) = lock_or_recover(&self.install_shared).take() {
                 self.update_check = UpdateCheckState::Done(Err(format!("install failed: {err}")));
             }
+        }
+    }
+
+    /// Paint the whole window shell and the open sheets.
+    ///
+    /// Split from [`Self::pre_frame`] so tests and `--a11y-dump` can render the
+    /// real UI through [`WindowGeometry`] with no window, tray or network.
+    fn render_ui(&mut self, ui: &mut egui::Ui, geometry: WindowGeometry) {
+        let ctx = ui.ctx().clone();
+        let viewport = ui.available_rect_before_wrap();
+        let (monitor_height, window_top) = (geometry.monitor_height, geometry.window_top); // One-time first-frame setup: platform-specific fonts and the
+                                                                                           // branded header mark texture.
+        if !self.fonts_setup {
+            self.fonts_setup = true;
+            apply_theme(&ctx);
+            P::setup_fonts(&ctx);
+            // `main.rs` binds the families before the first frame, when the
+            // language is not resolved yet; re-bind now that it is, so the CJK
+            // faces are ordered for the active locale rather than defaulted.
+            install_fonts(&ctx, Some(&i18n::current()));
+            self.header_icon = brand_mark_texture(&ctx);
         }
 
         // ── One status snapshot for the whole frame (W2-1 seam) ─────────────
@@ -4992,7 +5271,15 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         for row in rows.drain(..) {
                             let labels: Vec<&str> =
                                 row.iter().map(|index| entries[*index].0.as_ref()).collect();
-                            if let Some(local) = console_footer(ui, &labels, row_height) {
+                            let ids: Vec<&str> = row
+                                .iter()
+                                .map(|index| match entries[*index].1 {
+                                    0 => automation::FOOTER_HIDE,
+                                    1 => automation::FOOTER_SETTINGS,
+                                    _ => automation::FOOTER_QUIT,
+                                })
+                                .collect();
+                            if let Some(local) = console_footer(ui, &labels, row_height, &ids) {
                                 match entries[row[local]].1 {
                                     0 => {
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(
@@ -5049,11 +5336,16 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                         if let Some(warning) = &surface.warning {
                             let body = self.line_text(warning);
                             let tag = i18n::t(surface.word.key()).to_uppercase();
-                            notice_frame(ui, true, |ui| {
+                            let banner = notice_frame(ui, true, |ui| {
                                 tracked_label(ui, &tag, CAPTION, danger, TRACK_TAG);
                                 ui.add_space(S1);
                                 prose_label(ui, &body, PROSE, danger_text);
                             });
+                            // The warning is the one state the player must act
+                            // on: assertive, with its whole sentence as the name.
+                            banner
+                                .a11y_alert(format!("{tag}. {body}"))
+                                .a11y_automation_id(automation::WARNING);
                             ui.add_space(S2);
                         }
                         if let Some(notice) =
@@ -5063,9 +5355,13 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
                             // UX round 3 F1: the shipped shell renders the
                             // elevation notice without a tag — the hero is the
                             // one state expression; no hardcoded HOLDING label.
-                            notice_frame(ui, false, |ui| {
+                            let notice_frame = notice_frame(ui, false, |ui| {
                                 prose_label(ui, &text, PROSE, warn);
                             });
+                            notice_frame
+                                .a11y_text(text)
+                                .a11y_automation_id(automation::NOTICE)
+                                .a11y_live(egui::accesskit::Live::Polite, true);
                             ui.add_space(S2);
                         }
                         let relay_meta = self
@@ -5110,7 +5406,8 @@ impl<P: Platform> eframe::App for LightSpeedApp<P> {
         // Leaving Settings clears the once-per-open platform reconcile guard, so
         // the next open re-reads the real login entry instead of a stale value.
         if !self.show_settings {
-            self.autostart_synced = false;
+            // Offline rendering must not probe or reconcile the host.
+            self.autostart_synced = self.offline;
         }
         if self.show_settings {
             self.settings_sheet(&ctx);

@@ -41,6 +41,7 @@ Welcome to the LightSpeed documentation wiki - synced from the [source repo](htt
 | Document | Description |
 |----------|-------------|
 | [Glossary](glossary) | Terminology definitions |
+| [Accessibility](accessibility) | The Windows UI Automation tree, automation ids, live regions and how to verify them |
 | [Privacy](privacy) | Privacy policy and telemetry |
 | [Agent-System Audit](agent-system-audit-2026-11-16) | The 2026-11-16 DeepSeek Harness migration record |
 | [GitHub Feedback Audit](github-feedback-audit-2026-11-16) | Triage of the open issues, discussions and PR at 1.10.3 |

@@ -31,8 +31,8 @@ green that does not mean anything.
 - Reproduce the user's report before the fix and after it; keep both outputs.
 - Attach evidence a stranger can check: command, output, screenshot path, or
   benchmark table under `wat/evidence/<YYYY-MM-DD>/`.
-- For GUI work, verify visually — egui popups are invisible to the
-  accessibility tree.
+- For GUI work, verify visually — egui in-window Modal sheets and inline combo popups are exposed to the
+  accessibility tree (verified 2026-11-23); context menus are untested.
 
 ## Must not
 
@@ -62,7 +62,9 @@ Method:
 - Full crate suite, not a filter. Windows feature tests use
   --features windivert-redirect.
 - For client-gui, verify in a real window at narrow and wide width, boosting and
-  idle; egui popups do not appear in accessibility tooling, so use screenshots.
+  idle; in-window Modal sheets and inline combo popups appear in accessibility tooling
+  (verified 2026-11-23) while context menus are untested, so use screenshots for
+  those.
 
 Deliver: the new/changed tests, the exact commands, per-crate pass counts, the
 evidence paths under wat/evidence/<YYYY-MM-DD>/, and a short list of what
