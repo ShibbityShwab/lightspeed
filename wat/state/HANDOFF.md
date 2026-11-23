@@ -16,6 +16,88 @@ re-derive the incident from scratch.**
 - No production code change is in flight. The last plausible cold-start
   experiments were discarded; the released 1.12.5 artifact remains installed.
 
+## P0 progress (2026-11-23)
+
+- **P0-1 LANDED** as a behaviour-neutral instrumentation patch in worktree
+  `.agents/worktrees/dsh-97926fd1-6add` (the P0 work is based on `origin/master`
+  `9e8029b`; upstream has since moved to **`f2e7bb0`** — PR #226 a11y — see the
+  upstream-check entry in `current-phase.md`; changes are uncommitted).
+  `client/src/app/lifecycle.rs` emits the typed
+  `lifecycle.jsonl` record set plus the matching `event=…` trace line, the
+  build/commit/driver identity, the `prev_shutdown` marker and a 60 s
+  rate-limited read-only support bundle (WFP enumeration deferred). The engine,
+  AppCore, watchdog, interceptor and GUI emit `interceptor_state`,
+  `windivert_open`/`windivert_close`, `control_registration`, `presence`,
+  `watchdog`, `ui_error`/`ui.word`/`ui_state` and one `shutdown`.
+- **P0-2 LANDED.** A held pin no longer suppresses the `FWP_E_IN_USE` retry:
+  R1 is bounded (6 attempts / ~5 s / 50→400 ms), R2 is one pin-cycle per
+  episode, and the remedy is the honest R1–R4 ladder (R3 explicit only, OD-1;
+  reboot last with a reason). No "restart Windows" first line.
+- **P0-3 LANDED.** Registration pushes are generation-scoped (a retired
+  generation is `Superseded`/`Discarded`, never a failure), a bounded
+  registration ledger and typed `{source, epoch, auto_clear, latched}` error
+  records clear on recovery, `FAULT_LATCHED` carries close-age, and
+  `error_word_for` stops a non-fatal error masking the live word.
+- **P0-4 LANDED.** A start is no longer a Stop: a healthy live run is refused
+  with `ALREADY_INTERCEPTING`, only a dead/latched-fault run is replaced, and
+  `restart_interceptor_request` is the explicit restart. `hold_on_start` reaches
+  `InterceptorConfig.start_held`, so the Windows gate is created closed before
+  the first captured packet can tunnel (Mock gated for the T12 test). Every
+  capture-crossing GUI action records exactly one `gui.action` with its source.
+- **P0-5 LANDED (owner OD-7 approved).** The pin/WFP guarantee, the
+  unload/reload churn claim, the "callout/filter per open handle" claim and the
+  reboot-first remedy are gone from `docs/troubleshooting.md`,
+  `docs/release-notes-1.12.5.md`, `CHANGELOG.md`, the runtime `log_open_failure`
+  copy and the interceptor module comments. The 84-row matrix is scoped to 84
+  assertions on `84e15c3` (not the released artifact). The 8 localized
+  troubleshooting pages carry the corrected section and
+  `scripts/localization-state.json` was advanced (public translation endpoints
+  were unreachable, so the section was translated here; the pages already
+  declare unreviewed machine assistance). No tag or published body rewritten.
+- **P0-6a HARNESS READY; P0-6 GATE NOT PASSED.** `scripts/windivert-stability/`
+  provides the exact-artifact identity gate, a read-only clean-boot preflight,
+  a field-based `lifecycle.jsonl` consumer (A2 zero-teardown assertion,
+  handle/registration ledgers, 10-check self-test) and A1/A2/A4/A5/A6/A8/A11/A12
+  row scaffolding. On this dirty host the Lead re-ran the self-check: exit 2,
+  `BLOCKED: dirty kernel`, identity match, rows 0 PASS / 0 FAIL / 1 U / 7
+  BLOCKED, host unchanged. **Run the real rows only on an owner-arranged clean
+  boot (OD-6); a reboot must never turn a row green.** Evidence
+  `wat/evidence/2026-11-23/p0-6/`.
+- **Exact artifact verified (read-only):** the installed GUI is the published
+  `v1.12.5` artifact byte-for-byte (release zip hash = `sha256.sum`; tag
+  `v1.12.5` = `6e30a65` = release target). The 84/84 matrix binary was a
+  different binary (`F8ECE582…`, built from `84e15c3`). Evidence
+  `wat/evidence/2026-11-23/p0-1/artifact-verify.log`.
+- **Gates:** P0-1 baseline fmt/clippy clean, workspace **2,036 / 0 / 7**, GUI
+  **222 / 0 / 0**, WinDivert **1,687 / 0 / 9**. P0-2+P0-3: **2,056 / 223 /
+  1,713**. P0-2+P0-3+P0-4: **2,067 / 223 / 1,724**. Final integrated tree
+  (`wat/evidence/2026-11-23/final-p0/lead-gate.log`): workspace
+  **2,067 / 0 / 7**, GUI **223 / 0 / 0**, WinDivert **1,724 / 0 / 9**, clippy
+  0 real warnings, `localized-docs` + `localization-sync` green. Guard note:
+  the GUI G3 budgets were deliberately re-measured (`app.rs`
+  4734→5235→5269, `presence.rs` 482→740, `route_surface.rs` 2268→2570),
+  justified in the decision log; named follow-up is moving the trackers and the
+  action vocabulary into the core. G5 was fixed by moving platform FFI to
+  `client/src/host.rs`.
+- **Upstream check (2026-11-23, not merged).** `origin/master` moved to
+  `f2e7bb0` (PR #226, accessibility tree). Applying the whole P0 WIP to it gives
+  **4 mechanical conflicts** only: the `LightSpeedApp::new` → `new`/
+  `new_offline`/`build` split (keep `lifecycle::init` in the real `new`, never in
+  `build`, or offline/a11y rendering would write lifecycle state), the G3
+  budgets (merged counts: `app.rs` 5,565, `presence.rs` 758, `route_surface.rs`
+  2,570, a11y 631/420), and the two append-only WAT files. The resolved trial
+  tree is green: workspace **2,067 / 0 / 7**, GUI **254 / 0 / 1**, WinDivert
+  **1,724 / 0 / 9**, localization 4/4. Evidence
+  `wat/evidence/2026-11-23/upstream-merge-trial/`. The real worktree was not
+  merged (still 39 uncommitted entries on `9e8029b`).
+- **Next:** **P0-6 real rows need an owner-arranged clean boot (OD-6)**. Until
+  they pass, no row is green, **no stability claim**, and 1.12.5 remains a
+  candidate. Before landing, commit the P0 WIP, merge/rebase `f2e7bb0`,
+  resolve the four files above, re-run the gate. No real-driver run, no GUI
+  launch, no commit/push/tag/publish.
+  Owner decisions 2026-11-23: OD-7 approved, OD-1 declined (R3 explicit
+  administrator-only), OD-6 harness-now/later-clean-boot.
+
 ## What was observed (facts)
 
 - 1.12.5 cold-started on a clean boot and four manual Stop→Optimize cycles
@@ -27,8 +109,9 @@ re-derive the incident from scratch.**
   failed with `FWP_E_IN_USE` (`0x8032000A`); a second invocation `id=6` failed
   too. The control plane registered successfully immediately after each failed
   capture start, so route plane was alive while capture was dead.
-- The pin path suppresses retries (`should_retry` requires `!pin_active`), so
-  one transient became a hard failure with “restart Windows” advice.
+- The pin path suppressed retries (`should_retry` required `!pin_active`), so
+  one transient became a hard failure with “restart Windows” advice. **Fixed by
+  P0-2** (retry now runs while pinned; the remedy is the R1–R4 ladder).
 - The server re-detects themselves closed **zero** capture handles. The Stop
   actor is not logged; a stale ERROR card / manual Stop / implicit pre-stop is
   the working hypothesis, not a proven fact.
