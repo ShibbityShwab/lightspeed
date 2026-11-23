@@ -12,6 +12,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use crate::app::lifecycle::{RegistrationOutcome, SessionCloseReason};
 use crate::{RelayCandidate, ScoredRelay};
 
 use super::config::ProxyEntry;
@@ -516,6 +517,327 @@ pub fn stale_hold_due(
     fallback: std::time::Duration,
 ) -> bool {
     held_since.is_some_and(|since| intercepting && since.elapsed() >= fallback)
+}
+
+// ── Registration state machine (P0-3 / roadmap D4) ─────────────────────────
+//
+// The control plane is the one shared-status race the 2026-11-23 trace proved:
+// a newly learned game server retires the supervisor that the start is awaiting,
+// the retired generation's late result arrives as `Done(0)`, and the shipped
+// code maps it to a session-wide registration failure. The replacement's
+// success had no writer at all, so the ERROR card outlived the condition while
+// traffic relayed (`docs/audit/game-transition-state-machine-2026-11-23.md`
+// §3.5, invariant I5).
+//
+// The settlement (`docs/design/windivert-stability-roadmap-2026-11-23.md` D4):
+// every registration result belongs to a generation. Only the current generation
+// may publish; a retired one is discarded as `superseded`, never mapped to a
+// failure, and counted. The rules are pure so the race is testable without a
+// relay, a driver or a thread.
+
+/// What applying one registration result did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationApplied {
+    /// The result belongs to the current generation and is now the state.
+    Published,
+    /// A retired generation (or an explicit supersede): discarded and counted,
+    /// never projected onto a failure.
+    Superseded,
+}
+
+/// One registration result as the transport reported it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegistrationAttempt {
+    /// The relay in display form (`"1.2.3.4:4434"`).
+    pub relay: Option<String>,
+    /// The game server the registration reported, when one was known.
+    pub destination: Option<Ipv4Addr>,
+    /// The supervisor/registration generation this result belongs to.
+    pub generation: u64,
+    /// What the attempt did.
+    pub outcome: RegistrationOutcome,
+    /// The relay-issued session token on success.
+    pub session: Option<u32>,
+    /// Why the session ended, when the result closes one.
+    pub close_reason: Option<SessionCloseReason>,
+}
+
+impl RegistrationAttempt {
+    /// A successful registration by `generation`.
+    pub fn ok(generation: u64, session: u32, relay: impl Into<String>) -> Self {
+        Self {
+            relay: Some(relay.into()),
+            generation,
+            outcome: RegistrationOutcome::Ok,
+            session: Some(session),
+            ..Default::default()
+        }
+    }
+
+    /// A failed first attempt by `generation`.
+    pub fn failed(generation: u64, relay: impl Into<String>) -> Self {
+        Self {
+            relay: Some(relay.into()),
+            generation,
+            outcome: RegistrationOutcome::Fail,
+            ..Default::default()
+        }
+    }
+
+    /// A retired result that is not a failure for presentation (I5).
+    pub fn superseded(
+        generation: u64,
+        relay: impl Into<String>,
+        close_reason: SessionCloseReason,
+    ) -> Self {
+        Self {
+            relay: Some(relay.into()),
+            generation,
+            outcome: RegistrationOutcome::Superseded,
+            close_reason: Some(close_reason),
+            ..Default::default()
+        }
+    }
+}
+
+/// One row of the registration ledger (D4 item 2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegistrationRecord {
+    /// The relay this registration was for.
+    pub relay: Option<String>,
+    /// The game server reported to the relay, when one was known.
+    pub destination: Option<Ipv4Addr>,
+    /// The generation the record belongs to.
+    pub generation: u64,
+    /// The relay-issued session token, when the attempt produced one.
+    pub session: Option<u32>,
+    /// The outcome the record stands for (`Superseded` for discarded results).
+    pub outcome: RegistrationOutcome,
+    /// The session this record replaced, when one was live.
+    pub prev_session: Option<u32>,
+    /// Whether the result was discarded as retired.
+    pub superseded: bool,
+    /// Why the session this record describes ended, when it has.
+    pub close_reason: Option<SessionCloseReason>,
+}
+
+/// The registration state the shared status publishes (D4 items 1–2).
+///
+/// At most one session is active. Every session token that reaches the status is
+/// resolvable to a [`RegistrationRecord`] here, so a card or a tool can name the
+/// registration a token came from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegistrationStatus {
+    /// The newest generation the ledger has accepted.
+    pub generation: u64,
+    /// The one active session, when the current generation registered.
+    pub session: Option<u32>,
+    /// Whether the current generation is registered.
+    pub registered: bool,
+    /// Retired results discarded, never mapped to a failure (T11's counter).
+    pub superseded_total: u64,
+    /// Why the most recent session ended, when one has.
+    pub close_reason: Option<SessionCloseReason>,
+    /// Bounded history, oldest first (the active session is always inside).
+    pub ledger: Vec<RegistrationRecord>,
+}
+
+impl RegistrationStatus {
+    /// How many ledger rows are kept. Older rows are dropped; an active session
+    /// is always the newest Ok row, so it is never the one dropped.
+    pub const LEDGER_CAPACITY: usize = 32;
+
+    /// Apply one registration result.
+    ///
+    /// `superseded` is the transport's verdict (a newer supervisor generation
+    /// exists for the relay). A result is also discarded when its generation is
+    /// older than the newest one already accepted: an old result never publishes
+    /// over a newer one, whatever it says. Both discard paths are the same
+    /// thing to the user (`superseded`, never a failure).
+    pub fn apply(
+        &mut self,
+        mut attempt: RegistrationAttempt,
+        superseded: bool,
+    ) -> RegistrationApplied {
+        // An `Ok` without a session cannot be a registration; record it as the
+        // failure it is instead of claiming a session that does not exist.
+        if attempt.outcome == RegistrationOutcome::Ok && attempt.session.is_none() {
+            attempt.outcome = RegistrationOutcome::Fail;
+        }
+        let stale = attempt.generation < self.generation;
+        if superseded || stale || attempt.outcome == RegistrationOutcome::Superseded {
+            self.superseded_total = self.superseded_total.saturating_add(1);
+            self.push(RegistrationRecord {
+                relay: attempt.relay,
+                destination: attempt.destination,
+                generation: attempt.generation,
+                session: attempt.session,
+                outcome: RegistrationOutcome::Superseded,
+                prev_session: self.session,
+                superseded: true,
+                close_reason: Some(
+                    attempt
+                        .close_reason
+                        .unwrap_or(SessionCloseReason::SessionReplaced),
+                ),
+            });
+            return RegistrationApplied::Superseded;
+        }
+        self.generation = attempt.generation;
+        let prev_session = self.session;
+        match attempt.outcome {
+            RegistrationOutcome::Ok => {
+                if let Some(previous) = prev_session {
+                    if Some(previous) != attempt.session {
+                        self.close_session(
+                            previous,
+                            attempt
+                                .close_reason
+                                .unwrap_or(SessionCloseReason::SessionReplaced),
+                        );
+                    }
+                }
+                self.registered = true;
+                self.session = attempt.session;
+                self.close_reason = None;
+            }
+            _ => {
+                // Only a current generation's failure may withdraw a session,
+                // and a failure is not a close: it records no close reason of
+                // its own unless the transport supplied one.
+                self.registered = false;
+                self.session = None;
+                if let Some(reason) = attempt.close_reason {
+                    self.close_reason = Some(reason);
+                }
+            }
+        }
+        self.push(RegistrationRecord {
+            relay: attempt.relay,
+            destination: attempt.destination,
+            generation: attempt.generation,
+            session: attempt.session,
+            outcome: attempt.outcome,
+            prev_session,
+            superseded: false,
+            close_reason: attempt.close_reason,
+        });
+        RegistrationApplied::Published
+    }
+
+    /// A same-source healthy result at the same or a newer generation clears a
+    /// stale failure (I5/I6). Returns whether anything was published.
+    ///
+    /// This is the replacement-supervisor path: the destination report retires
+    /// the start's supervisor, and the replacement registers without anybody
+    /// awaiting it. The next snapshot observes it here, so the newer success has
+    /// a writer instead of leaving the retired generation's failure on screen.
+    pub fn note_healthy(&mut self, generation: u64, session: u32, relay: Option<String>) -> bool {
+        if generation < self.generation {
+            return false;
+        }
+        if self.registered && self.session == Some(session) && generation == self.generation {
+            return false;
+        }
+        let attempt = RegistrationAttempt {
+            relay,
+            generation,
+            outcome: RegistrationOutcome::Ok,
+            session: Some(session),
+            ..Default::default()
+        };
+        self.apply(attempt, false) == RegistrationApplied::Published
+    }
+
+    /// The active session closed (Stop/Quit/replaced): no failure is recorded.
+    /// Returns the session that closed, if one was live.
+    pub fn note_closed(&mut self, reason: SessionCloseReason) -> Option<u32> {
+        let session = self.session?;
+        self.registered = false;
+        self.session = None;
+        self.close_reason = Some(reason);
+        self.close_session(session, reason);
+        Some(session)
+    }
+
+    /// Record a candidate registration that is **not** the session in use.
+    ///
+    /// An in-session relay switch registers a candidate on another relay; a
+    /// failed candidate keeps the live session (invariant I4's "stay on the old
+    /// relay"), so it is a ledger row only. Only a success promotes through
+    /// [`Self::apply`]; a failure here never withdraws the active session.
+    pub fn note_candidate(&mut self, attempt: RegistrationAttempt) {
+        self.push(RegistrationRecord {
+            relay: attempt.relay,
+            destination: attempt.destination,
+            generation: attempt.generation,
+            session: attempt.session,
+            outcome: attempt.outcome,
+            prev_session: None,
+            superseded: false,
+            close_reason: attempt.close_reason,
+        });
+    }
+
+    /// The ledger row for the active session, when there is one.
+    pub fn active_record(&self) -> Option<&RegistrationRecord> {
+        let session = self.session?;
+        self.ledger.iter().rev().find(|record| {
+            record.session == Some(session) && record.outcome == RegistrationOutcome::Ok
+        })
+    }
+
+    fn close_session(&mut self, session: u32, reason: SessionCloseReason) {
+        if let Some(record) = self
+            .ledger
+            .iter_mut()
+            .rev()
+            .find(|record| record.session == Some(session))
+        {
+            record.close_reason = Some(reason);
+        }
+    }
+
+    fn push(&mut self, record: RegistrationRecord) {
+        if self.ledger.len() == Self::LEDGER_CAPACITY {
+            self.ledger.remove(0);
+        }
+        self.ledger.push(record);
+    }
+}
+
+// ── Error presentation (P0-3 / invariants I6–I7) ───────────────────────────
+
+/// A latched capture-plane fault (P0-3, roadmap D4 item 4 / invariant I7).
+///
+/// The one error that may replace a live capture word. It carries the failure
+/// kind and the handle-layer close→open age from the interceptor helper, which
+/// is exactly the context the 2026-11-23 trace lacked when `FWP_E_IN_USE`
+/// followed a Stop. Only a successful start at a newer epoch clears it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CaptureFault {
+    /// The failing step (`windivert_open`, `teardown_incomplete`, …).
+    pub kind: String,
+    /// The diagnostic the backend produced.
+    pub detail: String,
+    /// The capture plane's epoch when the fault was recorded.
+    pub epoch: u64,
+    /// Milliseconds since the last successful handle close, when one is known.
+    pub close_age_ms: Option<u64>,
+}
+
+/// Whether the ERROR word may be rendered for this snapshot (I7).
+///
+/// While a capture run is live, only a latched capture-plane fault may replace
+/// the live word: a route or registration warning is a banner beside the word,
+/// because "the card says failed while traffic relays" is the truthfulness
+/// defect this rule closes. With no live run there is no state to mask, so any
+/// error may take the word.
+pub fn error_word_for(has_error: bool, boosting: bool, capture_fault_latched: bool) -> bool {
+    if !has_error {
+        return false;
+    }
+    !boosting || capture_fault_latched
 }
 
 #[cfg(test)]
@@ -1063,5 +1385,225 @@ mod tests {
             crate::DestinationLegSource::Unknown,
             "the untrusted region prior is not used"
         );
+    }
+
+    // ── registration state machine (P0-3 / D4) ─────────────────────────────
+
+    fn relay_name(last: u8) -> String {
+        relay(last).to_string()
+    }
+
+    /// Register `generation` successfully at `session`.
+    fn registered(generation: u64, session: u32) -> RegistrationAttempt {
+        RegistrationAttempt::ok(generation, session, relay_name(1))
+    }
+
+    #[test]
+    fn a_successful_registration_publishes_its_session_and_keeps_one_active() {
+        let mut status = RegistrationStatus::default();
+        assert_eq!(
+            status.apply(registered(1, 1000), false),
+            RegistrationApplied::Published
+        );
+        assert!(status.registered);
+        assert_eq!(status.session, Some(1000));
+        assert_eq!(status.generation, 1);
+        assert_eq!(status.superseded_total, 0);
+        let record = status.active_record().expect("the session is resolvable");
+        assert_eq!(record.session, Some(1000));
+        assert_eq!(record.generation, 1);
+        assert_eq!(record.outcome, RegistrationOutcome::Ok);
+        assert!(!record.superseded);
+        assert_eq!(record.prev_session, None);
+    }
+
+    /// **T11** — a retired generation is not a failure.
+    ///
+    /// The start's supervisor is retired before its first attempt completes; its
+    /// late result must be discarded and counted, and it must never withdraw the
+    /// live session or publish a failure.
+    #[test]
+    fn t11_a_superseded_generation_is_discarded_and_counted_never_a_failure() {
+        let mut status = RegistrationStatus::default();
+        status.apply(registered(1, 1000), false);
+        let retired = RegistrationAttempt::failed(1, relay_name(1));
+
+        assert_eq!(
+            status.apply(retired, true),
+            RegistrationApplied::Superseded,
+            "a retired generation's result is superseded"
+        );
+        assert!(status.registered, "the live session must survive");
+        assert_eq!(status.session, Some(1000));
+        assert_eq!(status.superseded_total, 1, "superseded accounting");
+        let discarded = status
+            .ledger
+            .last()
+            .expect("the discarded result is on record");
+        assert!(discarded.superseded);
+        assert_eq!(discarded.outcome, RegistrationOutcome::Superseded);
+        assert_eq!(
+            discarded.close_reason,
+            Some(SessionCloseReason::SessionReplaced)
+        );
+
+        // ... and the explicit outcome does the same without the flag.
+        let mut explicit = RegistrationStatus::default();
+        explicit.apply(registered(1, 1001), false);
+        assert_eq!(
+            explicit.apply(
+                RegistrationAttempt::superseded(1, relay_name(1), SessionCloseReason::ClientQuit),
+                false
+            ),
+            RegistrationApplied::Superseded
+        );
+        assert!(explicit.registered);
+        assert_eq!(explicit.superseded_total, 1);
+        assert_eq!(
+            explicit.ledger.last().and_then(|row| row.close_reason),
+            Some(SessionCloseReason::ClientQuit)
+        );
+    }
+
+    /// **T10** — a stale registration result cannot withdraw a newer session.
+    ///
+    /// The generation guard is the ledger's own copy of the rule: even a result
+    /// the transport labelled current is discarded when a newer generation has
+    /// already published. That is what makes the stale ERROR card impossible even
+    /// if the transport's supersede signal is late.
+    #[test]
+    fn t10_a_stale_registration_error_is_discarded_after_a_newer_generation_succeeds() {
+        let mut status = RegistrationStatus::default();
+        status.apply(registered(1, 1000), false);
+        status.apply(registered(2, 2000), false);
+        assert_eq!(
+            status.session,
+            Some(2000),
+            "a newer generation replaces the session"
+        );
+        assert_eq!(
+            status.ledger[0].close_reason,
+            Some(SessionCloseReason::SessionReplaced),
+            "the replaced session's record names why it ended"
+        );
+
+        // The retired generation's failure arrives late, labelled current.
+        let stale = RegistrationAttempt::failed(1, relay_name(1));
+        assert_eq!(
+            status.apply(stale, false),
+            RegistrationApplied::Superseded,
+            "an older generation never publishes over a newer one"
+        );
+        assert!(status.registered);
+        assert_eq!(status.session, Some(2000));
+        assert_eq!(status.superseded_total, 1);
+    }
+
+    /// A replacement's success has a writer: a session first observed by the
+    /// snapshot path (the destination-report re-registration) publishes, and its
+    /// success is recorded exactly once.
+    #[test]
+    fn a_replacement_success_publishes_once_and_clears_the_retired_record() {
+        let mut status = RegistrationStatus::default();
+        status.apply(RegistrationAttempt::failed(1, relay_name(1)), false);
+        assert!(!status.registered);
+
+        assert!(
+            status.note_healthy(2, 2000, Some(relay_name(1))),
+            "the replacement's success is published"
+        );
+        assert!(status.registered);
+        assert_eq!(status.session, Some(2000));
+        assert!(
+            !status.note_healthy(2, 2000, Some(relay_name(1))),
+            "the same healthy result is idempotent (one record, not one per frame)"
+        );
+        assert_eq!(status.ledger.len(), 2, "failed then registered");
+
+        // An older generation's healthy result never rolls the state back.
+        assert!(!status.note_healthy(1, 999, Some(relay_name(1))));
+        assert_eq!(status.session, Some(2000));
+    }
+
+    #[test]
+    fn a_failed_switch_candidate_keeps_the_active_session() {
+        // An in-session relay switch registers a candidate on another relay. A
+        // failed candidate keeps the live session (invariant I4): it is a ledger
+        // row, never a withdrawal of the session in use.
+        let mut status = RegistrationStatus::default();
+        status.apply(registered(1, 1000), false);
+        status.note_candidate(RegistrationAttempt::failed(2, relay_name(2)));
+        assert!(status.registered);
+        assert_eq!(status.session, Some(1000));
+        assert_eq!(
+            status.generation, 1,
+            "a candidate does not advance the session's generation"
+        );
+        assert_eq!(
+            status.ledger.last().map(|record| record.outcome),
+            Some(RegistrationOutcome::Fail),
+            "the candidate failure is on record"
+        );
+        assert_eq!(status.superseded_total, 0);
+    }
+
+    #[test]
+    fn a_closed_session_is_not_a_failure_and_stays_resolvable() {
+        let mut status = RegistrationStatus::default();
+        status.apply(registered(1, 1000), false);
+        assert_eq!(
+            status.note_closed(SessionCloseReason::ClientQuit),
+            Some(1000)
+        );
+        assert!(!status.registered);
+        assert_eq!(status.session, None);
+        assert_eq!(status.close_reason, Some(SessionCloseReason::ClientQuit));
+        assert_eq!(
+            status.ledger.last().and_then(|row| row.close_reason),
+            Some(SessionCloseReason::ClientQuit),
+            "the closed session's record names why it ended"
+        );
+        assert_eq!(status.superseded_total, 0, "a close is not a supersede");
+        assert_eq!(
+            status.note_closed(SessionCloseReason::ClientQuit),
+            None,
+            "nothing is closed twice"
+        );
+    }
+
+    #[test]
+    fn the_ledger_is_bounded_and_keeps_the_active_session() {
+        let mut status = RegistrationStatus::default();
+        for generation in 1..=(RegistrationStatus::LEDGER_CAPACITY as u64 + 5) {
+            status.apply(registered(generation, 1000 + generation as u32), false);
+        }
+        assert_eq!(
+            status.ledger.len(),
+            RegistrationStatus::LEDGER_CAPACITY,
+            "history is bounded"
+        );
+        assert!(
+            status.active_record().is_some(),
+            "the active session survives"
+        );
+        assert_eq!(
+            status.ledger.last().and_then(|record| record.session),
+            status.session
+        );
+    }
+
+    // ── error presentation (I7 / T13 unit level) ───────────────────────────
+
+    #[test]
+    fn t13_a_non_fatal_error_never_takes_the_word_from_a_live_capture() {
+        // The observed defect: word=ERROR while traffic relayed. A live capture
+        // keeps its word and the error is a banner beside it.
+        assert!(!error_word_for(true, true, false));
+        // The one error that may mask a live capture is the latched fault.
+        assert!(error_word_for(true, true, true));
+        // With no live run there is nothing to mask: the error owns the word.
+        assert!(error_word_for(true, false, false));
+        // No error, no Error word, whatever the fault field says.
+        assert!(!error_word_for(false, true, true));
     }
 }

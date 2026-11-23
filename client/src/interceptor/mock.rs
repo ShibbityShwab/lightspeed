@@ -72,6 +72,31 @@ impl Default for MockInterceptor {
     }
 }
 
+/// A minimal in-memory config for crate-internal tests.
+///
+/// Shared by the mock's own tests and the command-layer P0-4/T15 tests, so a
+/// test that needs "a live run" never has to open a driver handle.
+#[cfg(test)]
+pub(crate) fn test_config() -> InterceptorConfig {
+    InterceptorConfig {
+        game_name: "TestGame".into(),
+        dynamic_server: false,
+        transport: crate::interceptor::TransportProto::Udp,
+        capture_tcp_ports: None,
+        process_names: vec!["TestGame.exe".to_string()],
+        process_target: None,
+        port_range: (27015, 27017),
+        path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
+        initial_routes: vec![],
+        proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
+        start_held: false,
+        fec_enabled: false,
+        fec_k: 4,
+        adaptive_fec: Default::default(),
+        bypass: Default::default(),
+    }
+}
+
 /// Test-only observation helpers for the mock's asynchronous shutdown.
 ///
 /// `stop()` only signals the mock's dedicated shutdown thread, which flips
@@ -135,7 +160,16 @@ impl TrafficInterceptor for MockInterceptor {
             stop_count.fetch_add(1, Ordering::Relaxed);
         });
 
-        Ok(InterceptorHandle::new(shutdown_tx, counters, "mock", None))
+        let mut handle = InterceptorHandle::new(shutdown_tx, counters, "mock", None);
+        // P0-4 / T12: mirror the one platform behaviour the engine-level hold
+        // test needs without a driver. A caller that asked for the hold gets a
+        // gate that is already closed; a caller that did not (every existing
+        // test) keeps the backend's "no gate" answer, exactly as Linux/macOS
+        // report and as the mock always did.
+        if config.start_held {
+            handle.attach_tunnelling_switch(Arc::new(AtomicBool::new(false)));
+        }
+        Ok(handle)
     }
 }
 
@@ -156,6 +190,7 @@ mod tests {
             path_mtu: crate::tunnel::pmtud::CONSERVATIVE_PATH_MTU,
             initial_routes: vec![],
             proxy_addr: SocketAddrV4::new(std::net::Ipv4Addr::new(127, 0, 0, 1), 4434),
+            start_held: false,
             fec_enabled: false,
             fec_k: 4,
             adaptive_fec: Default::default(),
@@ -218,5 +253,32 @@ mod tests {
         let _h1 = m.start(test_config()).unwrap();
         let _h2 = m.start(test_config()).unwrap();
         assert_eq!(m.start_count(), 2);
+    }
+
+    #[test]
+    fn a_held_start_attaches_a_closed_gate_and_an_unheld_start_stays_gateless() {
+        // P0-4 / T12: the hold must exist *before* the start returns, so a
+        // packet cannot be classified against an open gate in the window the
+        // GUI's old post-start `hold_tunnelling()` call left. A start that did
+        // not ask for the hold keeps the backend's "no gate" answer (the
+        // Linux/macOS behaviour), which is what the caller must be able to see.
+        let m = MockInterceptor::new();
+        let mut held_config = test_config();
+        held_config.start_held = true;
+        let held = m.start(held_config).expect("held mock start");
+        assert_eq!(
+            held.tunnelling_enabled(),
+            Some(false),
+            "a held start must return a CLOSED gate, not a gate the caller must close later"
+        );
+        assert!(held.set_tunnelling_enabled(true));
+        assert_eq!(held.tunnelling_enabled(), Some(true));
+
+        let plain = m.start(test_config()).expect("unheld mock start");
+        assert_eq!(
+            plain.tunnelling_enabled(),
+            None,
+            "an unheld start must keep the mock gateless, as before"
+        );
     }
 }

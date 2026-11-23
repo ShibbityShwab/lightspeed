@@ -44,6 +44,13 @@ use tracing::{error, info, warn};
 // The shared application DTOs (WF-081 core boundary). The CLI fills the same
 // fact shapes the GUI renders; it does not define its own.
 use lightspeed_client::app::dto as app_dto;
+// Bridge for the binary's duplicate module tree: `crate::interceptor` is
+// compiled here too (with `windivert-redirect`), and its lifecycle
+// instrumentation reaches the shared sink as `crate::app::lifecycle`. On the
+// library path that is a real module; here the crate-root alias makes the same
+// path resolve. Unused without the WinDivert feature.
+#[allow(unused_imports)]
+use lightspeed_client::app;
 
 use telemetry::TelemetryCollector;
 

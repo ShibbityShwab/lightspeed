@@ -66,6 +66,14 @@ pub mod config;
 pub mod discovery;
 pub mod dto;
 pub mod history;
+/// Lifecycle instrumentation v1 (WinDivert stability reset, P0-1).
+///
+/// Behaviour-neutral: a typed, stable `lifecycle.jsonl` event stream plus the
+/// identity stamp and the rate-limited support bundle. Nothing in the product
+/// reads these events; they exist so a field incident is attributable (build,
+/// actor, reason, handle ids, registration ledger, UI card) instead of inferred.
+/// See `docs/design/windivert-stability-roadmap-2026-11-23.md` P0-1.
+pub mod lifecycle;
 /// The adopted live session modes (post-W2 task-57).
 ///
 /// `--watch` (and, as it migrates, `--start-interceptor` and the `--game-server`

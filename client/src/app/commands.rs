@@ -27,6 +27,131 @@ use crate::interceptor::ProcessTarget;
 use crate::LightSpeedEngine;
 
 use super::dto::{AppError, AppErrorKind, SessionCommand, SessionCommandState};
+use super::lifecycle::{
+    self, ActionSource, Actor, CaptureState, ErrorSource, GuiAction, GuiActionKind, Intent,
+    InterceptReason, UiError, UiErrorOp,
+};
+
+/// The capture-plane state a `gui.action` record names (P0-4 / T15).
+///
+/// Read from the engine, not from presentation: the route word can be ERROR for
+/// a non-fatal registration warning while the capture run is healthy, and that
+/// must never read as a capture transition.
+fn capture_state_of(engine: &LightSpeedEngine) -> CaptureState {
+    let fault = engine.snapshot().capture_fault.is_some();
+    CaptureState::of(engine.is_intercepting(), fault)
+}
+
+/// The capture-plane intent a start expresses (P0-1: records only).
+///
+/// The source decides the reason/actor so the trace can tell a user Optimize
+/// from a presence auto-start without reading prose. Nothing branches on it.
+fn start_intent(source: ActionSource, command_id: &str) -> Intent {
+    let (reason, actor) = match source {
+        ActionSource::Auto => (InterceptReason::PresenceStart, Actor::Auto),
+        ActionSource::System => (InterceptReason::AutoRecover, Actor::System),
+        _ => (InterceptReason::UserStart, Actor::User),
+    };
+    Intent {
+        reason,
+        actor,
+        command_id: command_id.to_string(),
+    }
+}
+
+/// The capture-plane intent a stop expresses (P0-1: records only).
+///
+/// The only `System` stop in the GUI is the elevation handoff's pre-stop, so it
+/// is labelled as that handoff instead of masquerading as a user Stop.
+fn stop_intent(source: ActionSource) -> Intent {
+    let (reason, actor) = match source {
+        ActionSource::Auto => (InterceptReason::PresenceStop, Actor::Auto),
+        ActionSource::System => (InterceptReason::ElevationHandoff, Actor::System),
+        _ => (InterceptReason::UserStop, Actor::User),
+    };
+    Intent {
+        reason,
+        actor,
+        command_id: format!("{:?}", SessionCommand::StopBoost),
+    }
+}
+
+/// The capture-plane intent an explicit restart expresses (P0-1: records only).
+///
+/// A restart always names a recovery reason (`error_retry` for a user action,
+/// `auto_recover` for a presence/system one), never a plain start.
+fn restart_intent(source: ActionSource, command_id: &str) -> Intent {
+    let (reason, actor) = match source {
+        ActionSource::Auto | ActionSource::System => (InterceptReason::AutoRecover, Actor::System),
+        _ => (InterceptReason::ErrorRetry, Actor::User),
+    };
+    Intent {
+        reason,
+        actor,
+        command_id: command_id.to_string(),
+    }
+}
+
+/// The lifecycle intent a command expresses (P0-1: records only).
+///
+/// Set immediately before the command runs so the engine's `interceptor_state`
+/// and the interceptor's `windivert_open` records carry the actor and reason the
+/// field trace could not answer on 2026-11-23. Nothing branches on this value.
+fn intent_for_command(command: SessionCommand) -> Intent {
+    let (reason, actor) = match command {
+        SessionCommand::StartBoost => (InterceptReason::UserStart, Actor::User),
+        SessionCommand::StopBoost => (InterceptReason::UserStop, Actor::User),
+        SessionCommand::SelectRelay => (InterceptReason::RelaySwitch, Actor::Auto),
+        SessionCommand::Disconnect => (InterceptReason::UserStop, Actor::User),
+        SessionCommand::SetPathMtu => (InterceptReason::Unknown, Actor::Internal),
+        SessionCommand::Hold => (InterceptReason::Unknown, Actor::Internal),
+    };
+    Intent {
+        reason,
+        actor,
+        command_id: format!("{command:?}"),
+    }
+}
+
+/// The error-record source for a command failure (P0-3 owns the epoch rules;
+/// v1 records the source so a card can be attributed).
+///
+/// The mapping itself lives in [`crate::app::dto::source_for_kind`] so the
+/// command-side record and the render-side record cannot disagree about which
+/// subsystem one visible card belongs to.
+pub(crate) fn error_source_for(kind: AppErrorKind) -> ErrorSource {
+    crate::app::dto::source_for_kind(kind)
+}
+
+/// The `ui_error op=show` record for a failed command (pure; tested).
+pub(crate) fn ui_error_for_failure(command: SessionCommand, error: &AppError) -> UiError {
+    UiError {
+        op: UiErrorOp::Show,
+        source: Some(error_source_for(error.kind)),
+        kind: format!("{:?}", error.kind),
+        detail_key: None,
+        source_command: Some(format!("{command:?}")),
+        visible_primary_state: None,
+        reason_code: error.detail.clone(),
+        cleared_by: None,
+        age_ms: None,
+    }
+}
+
+/// The `ui_error op=clear` record for a cleared/replaced card (pure; tested).
+pub(crate) fn ui_error_for_clear(cleared_by: &str) -> UiError {
+    UiError {
+        op: UiErrorOp::Clear,
+        source: None,
+        kind: String::new(),
+        detail_key: None,
+        source_command: None,
+        visible_primary_state: None,
+        reason_code: None,
+        cleared_by: Some(cleared_by.to_string()),
+        age_ms: None,
+    }
+}
 
 /// The shared application core every front end runs commands through.
 ///
@@ -55,20 +180,75 @@ impl AppCore {
 
     /// Clear the recorded command error (a successful retry).
     pub fn clear_error(&mut self) {
+        let had_error = self.session.last_error.is_some();
         self.session.clear_error();
+        if had_error {
+            lifecycle::emit("ui_error", &ui_error_for_clear("clear_error"));
+        }
     }
 
     /// Clear a stale registration error once the engine reports the control
     /// plane registered. The retry may have succeeded in the background while
     /// the error card kept the previous command failure on screen.
     pub fn clear_stale_registration_error(&mut self) {
+        let cleared = self
+            .session
+            .last_error
+            .as_ref()
+            .and_then(|error| error.detail.as_deref())
+            .is_some_and(|detail| detail.contains("control-plane registration failed"));
         self.session
             .clear_error_matching("control-plane registration failed");
+        if cleared {
+            lifecycle::emit("ui_error", &ui_error_for_clear("registration_succeeded"));
+        }
     }
 
     /// The engine's current status snapshot (read-only passthrough).
     pub fn snapshot(&self) -> crate::EngineStatus {
         lock_or_recover(&self.engine).snapshot()
+    }
+
+    /// The capture-plane state the engine is in right now (T15 `gui.action`).
+    pub fn capture_state(&self) -> CaptureState {
+        capture_state_of(&lock_or_recover(&self.engine))
+    }
+
+    /// Record the one `gui.action` for a capture-crossing invocation.
+    ///
+    /// Called exactly once per action, after the command attempt. `from` is read
+    /// before the command so a refused start records `from == to`, and the trace
+    /// then shows both the refusal and that nothing was torn down.
+    fn record_action(
+        &self,
+        action: GuiActionKind,
+        source: ActionSource,
+        from: CaptureState,
+        to: CaptureState,
+        command_id: &str,
+    ) {
+        lifecycle::record_gui_action(&GuiAction {
+            action,
+            source,
+            from,
+            to,
+            command_id,
+        });
+    }
+
+    /// [`Self::record_action`] with `to` read from the engine now.
+    ///
+    /// The engine lock must not be held by the caller: the command has already
+    /// returned, so this reads the state the action actually left.
+    fn record_action_now(
+        &self,
+        action: GuiActionKind,
+        source: ActionSource,
+        from: CaptureState,
+        command_id: &str,
+    ) {
+        let to = self.capture_state();
+        self.record_action(action, source, from, to, command_id);
     }
 
     /// Run one command, folding its result into the shared command state.
@@ -83,6 +263,23 @@ impl AppCore {
         command: SessionCommand,
         call: impl FnOnce(&mut LightSpeedEngine) -> Result<T, String>,
     ) -> Result<T, AppError> {
+        self.run_with_intent(command, intent_for_command(command), call)
+    }
+
+    /// Run a command with an explicit lifecycle intent.
+    ///
+    /// Used by the shutdown path, which must not overwrite the reason the front
+    /// end stamped (`quit` / `update` / `elevation_handoff`) with the generic
+    /// `user_stop` that the `StopBoost` command would derive.
+    fn run_with_intent<T>(
+        &mut self,
+        command: SessionCommand,
+        intent: Intent,
+        call: impl FnOnce(&mut LightSpeedEngine) -> Result<T, String>,
+    ) -> Result<T, AppError> {
+        // Behaviour-neutral intent stamp: the engine and the interceptor read it
+        // when they record the transition this command causes.
+        lifecycle::set_intent(intent);
         self.session.begin(command);
         let result = {
             let mut engine = lock_or_recover(&self.engine);
@@ -132,6 +329,14 @@ impl AppCore {
     /// the Error row leads with the sentence and keeps this detail behind
     /// `Details` (spec §2.8). The game key is attributed before the start so the
     /// telemetry samples describe this session.
+    ///
+    /// P0-4: a start is **not** a Stop. The engine refuses a start while a
+    /// healthy run is live (`"interception is already running; stop it first, or
+    /// use restart"`), and this command leaves that run alone; the refusal is
+    /// recorded as exactly one `gui.action` whose `from == to`. `source` names
+    /// who asked (button/tray/shortcut/auto/system); `hold_on_start` asks the
+    /// backend to install the tunnelling hold before the first packet (T12).
+    #[allow(clippy::too_many_arguments)]
     pub fn start_boost(
         &mut self,
         game_key: &str,
@@ -140,12 +345,67 @@ impl AppCore {
         fec_k: u8,
         port_range: Option<(u16, u16)>,
         target: Option<ProcessTarget>,
+        source: ActionSource,
+        hold_on_start: bool,
     ) -> Result<(), AppError> {
         let game_key = game_key.to_string();
-        self.run(SessionCommand::StartBoost, move |engine| {
-            engine.set_telemetry_game(&game_key);
-            engine.start_interceptor_with_target(&game_key, relay, fec, fec_k, port_range, target)
-        })
+        let from = self.capture_state();
+        let request = crate::engine::InterceptorRequest::new(&game_key, relay, fec, fec_k)
+            .with_port_range(port_range)
+            .with_process_target(target)
+            .with_hold_on_start(hold_on_start);
+        let result = self.run_with_intent(
+            SessionCommand::StartBoost,
+            start_intent(source, "StartBoost"),
+            move |engine| {
+                engine.set_telemetry_game(&game_key);
+                engine.start_interceptor_request(request)
+            },
+        );
+        // Exactly one record per invocation, refused or not (T15).
+        self.record_action_now(GuiActionKind::Optimize, source, from, "StartBoost");
+        result
+    }
+
+    /// Explicitly restart interception: stop -> start in one named action.
+    ///
+    /// This is the only start that may replace a healthy run, so a front end
+    /// that intends a restart asks for one instead of relying on a start to
+    /// pre-stop (P0-4 / invariant I2). The lifecycle intent is a recovery reason
+    /// (`error_retry`/`auto_recover`), never a plain user start.
+    ///
+    /// No GUI control calls this today — the frozen route surface offers only
+    /// Optimize/Stop, and the error-card Retry path is P1 — but it is the API the
+    /// explicit-restart action is required to exist for, and its `gui.action`
+    /// record is tested.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restart_boost(
+        &mut self,
+        game_key: &str,
+        relay: SocketAddrV4,
+        fec: bool,
+        fec_k: u8,
+        port_range: Option<(u16, u16)>,
+        target: Option<ProcessTarget>,
+        source: ActionSource,
+        hold_on_start: bool,
+    ) -> Result<(), AppError> {
+        let game_key = game_key.to_string();
+        let from = self.capture_state();
+        let request = crate::engine::InterceptorRequest::new(&game_key, relay, fec, fec_k)
+            .with_port_range(port_range)
+            .with_process_target(target)
+            .with_hold_on_start(hold_on_start);
+        let result = self.run_with_intent(
+            SessionCommand::StartBoost,
+            restart_intent(source, "StartBoost"),
+            move |engine| {
+                engine.set_telemetry_game(&game_key);
+                engine.restart_interceptor_request(request)
+            },
+        );
+        self.record_action_now(GuiActionKind::Restart, source, from, "StartBoost");
+        result
     }
 
     /// Build the interceptor plan for a front end that owns its policy (the
@@ -213,12 +473,29 @@ impl AppCore {
 
     /// Stop every tunnel backend: a true Stop.
     ///
+    /// This is the shared entry point the adopted CLI live modes call. It is the
+    /// `System`-sourced form of [`Self::stop_boost_from`] (a CLI process has no
+    /// lifecycle sink, so no `gui.action` is emitted there); the GUI calls the
+    /// sourced form so its Stop carries the button/tray source.
+    pub fn stop_boost(&mut self) -> Result<(), AppError> {
+        self.stop_boost_from(ActionSource::System)
+    }
+
+    /// Stop every tunnel backend, recording the T15 `gui.action` for `source`.
+    ///
     /// The diverting intercept/inject/shadow handles close through the normal
     /// interceptor teardown; the process-wide driver pin stays held for the next
     /// Optimize. A teardown that cannot be acknowledged is the Tunnel taxonomy
-    /// error and latches the engine fail-closed until restart.
-    pub fn stop_boost(&mut self) -> Result<(), AppError> {
-        self.run(SessionCommand::StopBoost, |engine| engine.stop_boost())
+    /// error and latches the engine fail-closed until restart. Exactly one
+    /// `gui.action` record is emitted per invocation (P0-4 / T15).
+    pub fn stop_boost_from(&mut self, source: ActionSource) -> Result<(), AppError> {
+        let from = self.capture_state();
+        let result =
+            self.run_with_intent(SessionCommand::StopBoost, stop_intent(source), |engine| {
+                engine.stop_boost()
+            });
+        self.record_action_now(GuiActionKind::Stop, source, from, "StopBoost");
+        result
     }
 
     /// Explicit session shutdown: the true Stop, then release the driver pin.
@@ -227,8 +504,57 @@ impl AppCore {
     /// so the pin survives to make the next Optimize cheap. An unclean teardown
     /// is returned as the Tunnel taxonomy error so a caller about to hand the
     /// process away (self-update) can refuse instead of killing a live filter.
-    pub fn shutdown(&mut self) -> Result<(), AppError> {
-        self.run(SessionCommand::StopBoost, |engine| engine.shutdown())
+    ///
+    /// `source` names who initiated the exit (system for quit/update/elevation);
+    /// the invocation records exactly one `gui.action` whose kind follows the
+    /// exit reason the front end stamped (P0-4 / T15).
+    pub fn shutdown(&mut self, source: ActionSource) -> Result<(), AppError> {
+        // Keep the front end's shutdown reason when it supplied one; a caller
+        // that did not (tests, the CLI) gets the truthful `quit` default. The
+        // generic `StopBoost` mapping would report `user_stop`, hiding a Quit in
+        // the very trace P0-1 exists to make attributable.
+        let current = lifecycle::current_intent();
+        let intent = match current.reason {
+            InterceptReason::Quit | InterceptReason::Update | InterceptReason::ElevationHandoff => {
+                current
+            }
+            _ => Intent {
+                reason: InterceptReason::Quit,
+                actor: Actor::User,
+                command_id: "quit".to_string(),
+            },
+        };
+        let action = match intent.reason {
+            InterceptReason::Update => GuiActionKind::UpdateInstall,
+            InterceptReason::ElevationHandoff => GuiActionKind::ElevationHandoff,
+            _ => GuiActionKind::Quit,
+        };
+        let command_id = intent.command_id.clone();
+        let from = self.capture_state();
+        let result = self.run_with_intent(SessionCommand::StopBoost, intent, |engine| {
+            engine.shutdown()
+        });
+        // The exit hands the process away: the capture plane is not merely idle,
+        // it is being left for good.
+        self.record_action(action, source, from, CaptureState::Shutdown, &command_id);
+        result
+    }
+
+    /// Record the one `gui.action` for the self-update install.
+    ///
+    /// The install shuts the engine down from its own thread (it must own the
+    /// `Arc<Mutex<LightSpeedEngine>>` for the exchange), so the action is
+    /// recorded here at the click that started it — exactly once, before the
+    /// thread runs (P0-4 / T15).
+    pub fn record_update_install(&self) {
+        let from = self.capture_state();
+        self.record_action(
+            GuiActionKind::UpdateInstall,
+            ActionSource::System,
+            from,
+            CaptureState::Shutdown,
+            "update",
+        );
     }
 
     /// Stop the interceptor but keep the session's control-plane registration.
@@ -285,6 +611,11 @@ impl AppCore {
 /// Pure and separately tested: every command above routes through it, so the
 /// in-flight/`last_error` transitions and the `String`→[`AppError`] mapping are
 /// one implementation, not twelve.
+///
+/// P0-3 (roadmap D4 item 3): a successful command clears the error **it** left
+/// behind. The field incident's second sticky path was a failed Optimize pinning
+/// the window to ERROR until the process restarted; the command slot no longer
+/// latches (`docs/audit/game-transition-state-machine-2026-11-23.md` §3.5/F5).
 pub(crate) fn record_command_result<T>(
     session: &mut SessionCommandState,
     command: SessionCommand,
@@ -292,12 +623,23 @@ pub(crate) fn record_command_result<T>(
 ) -> Result<T, AppError> {
     match result {
         Ok(value) => {
-            session.finish(command);
+            if session.finish(command) {
+                lifecycle::emit("ui_error", &ui_error_for_clear(&format!("{command:?}")));
+            }
             Ok(value)
         }
         Err(detail) => {
+            let replacing = session.last_error.is_some();
             let error = AppError::for_kind(command_error_kind(command), detail);
             session.fail(command, error.clone());
+            // The stored record is stamped by `fail`; emit that same record so
+            // the event and the state cannot disagree about its epoch.
+            let recorded = session.last_error.clone().unwrap_or(error.clone());
+            let mut event = ui_error_for_failure(command, &recorded);
+            if replacing {
+                event.op = UiErrorOp::Replace;
+            }
+            lifecycle::emit("ui_error", &event);
             Err(error)
         }
     }
@@ -366,10 +708,31 @@ mod tests {
             "the Error row reads the same failure the caller received"
         );
 
-        // A later success does not erase the recorded error: the Error panel
-        // keeps its Details until the user retries (the shell clears it).
+        // P0-3: the same command succeeding is the retry, and it clears the
+        // record it made. No error may latch for the process lifetime.
         let _ = record_command_result::<()>(&mut session, SessionCommand::StartBoost, Ok(()));
-        assert!(session.last_error.is_some());
+        assert_eq!(
+            session.last_error, None,
+            "the successful retry clears the stale card"
+        );
+    }
+
+    #[test]
+    fn a_different_commands_success_does_not_clear_the_failure() {
+        let mut session = SessionCommandState::default();
+        let _ = record_command_result::<()>(
+            &mut session,
+            SessionCommand::SelectRelay,
+            Err("control-plane registration failed".to_string()),
+        );
+        let _ = record_command_result::<()>(&mut session, SessionCommand::StartBoost, Ok(()));
+        assert_eq!(
+            session.last_error.as_ref().map(|error| error.kind),
+            Some(crate::app::dto::AppErrorKind::Route),
+            "only the command that failed may clear its error"
+        );
+        let _ = record_command_result::<()>(&mut session, SessionCommand::SelectRelay, Ok(()));
+        assert_eq!(session.last_error, None);
     }
 
     #[test]
@@ -487,9 +850,275 @@ mod tests {
         // a no-op. The command slot must settle, or the next frame shows STARTING
         // on a process that is about to exit.
         core.commands_mut()
-            .shutdown()
+            .shutdown(ActionSource::System)
             .expect("a fresh engine shuts down cleanly");
         assert!(core.commands_mut().session().in_flight.is_none());
         assert!(core.commands_mut().session().last_error.is_none());
+    }
+
+    // ── P0-1 lifecycle instrumentation (behaviour-neutral) ────────────────
+
+    #[test]
+    fn a_quit_shutdown_keeps_the_quit_reason_instead_of_user_stop() {
+        let (_runtime, mut core) = session_core();
+        lifecycle::set_intent(Intent {
+            reason: InterceptReason::Quit,
+            actor: Actor::User,
+            command_id: "tray-quit".to_string(),
+        });
+        core.commands_mut()
+            .shutdown(ActionSource::System)
+            .expect("a fresh engine shuts down cleanly");
+        let intent = lifecycle::current_intent();
+        assert_eq!(
+            intent.reason,
+            InterceptReason::Quit,
+            "the StopBoost command must not relabel a Quit as user_stop"
+        );
+        assert_eq!(intent.command_id, "tray-quit");
+
+        // No front-end reason: the shutdown defaults to a truthful quit.
+        lifecycle::set_intent(Intent::default());
+        core.commands_mut()
+            .shutdown(ActionSource::System)
+            .expect("a fresh engine shuts down cleanly");
+        assert_eq!(lifecycle::current_intent().reason, InterceptReason::Quit);
+    }
+
+    #[test]
+    fn command_failures_and_clears_build_the_ui_error_events() {
+        let error = AppError::for_kind(AppErrorKind::Tunnel, "WinDivert open failed");
+        let show = ui_error_for_failure(SessionCommand::StartBoost, &error);
+        assert_eq!(show.op, UiErrorOp::Show);
+        assert_eq!(show.source, Some(ErrorSource::Capture));
+        assert_eq!(show.kind, "Tunnel");
+        assert_eq!(show.source_command.as_deref(), Some("StartBoost"));
+        assert_eq!(show.reason_code.as_deref(), Some("WinDivert open failed"));
+
+        let clear = ui_error_for_clear("StopBoost");
+        assert_eq!(clear.op, UiErrorOp::Clear);
+        assert_eq!(clear.cleared_by.as_deref(), Some("StopBoost"));
+
+        // The source mapping names what failed, not one blanket subsystem.
+        assert_eq!(
+            error_source_for(AppErrorKind::Route),
+            ErrorSource::Registration
+        );
+        assert_eq!(error_source_for(AppErrorKind::Config), ErrorSource::Config);
+        assert_eq!(error_source_for(AppErrorKind::Game), ErrorSource::Game);
+    }
+
+    #[test]
+    fn commands_stamp_the_interception_intent_without_changing_behaviour() {
+        let start = intent_for_command(SessionCommand::StartBoost);
+        assert_eq!(start.reason, InterceptReason::UserStart);
+        assert_eq!(start.actor, Actor::User);
+        assert_eq!(start.command_id, "StartBoost");
+
+        let stop = intent_for_command(SessionCommand::StopBoost);
+        assert_eq!(stop.reason, InterceptReason::UserStop);
+
+        let relay = intent_for_command(SessionCommand::SelectRelay);
+        assert_eq!(relay.reason, InterceptReason::RelaySwitch);
+        assert_eq!(relay.actor, Actor::Auto);
+    }
+
+    // ── P0-4 / T15: the capture-crossing action audit ─────────────────────
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lightspeed-p0-4-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The `gui.action` records the isolated test sink captured, oldest first.
+    fn gui_actions(dir: &std::path::Path) -> Vec<serde_json::Value> {
+        let text = std::fs::read_to_string(dir.join(lifecycle::LIFECYCLE_FILE)).unwrap_or_default();
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["event"] == "gui.action")
+            .collect()
+    }
+
+    /// A live in-memory run, so "a start while a healthy run is live" can be
+    /// tested without a driver handle.
+    fn healthy_mock_handle(held: bool) -> crate::interceptor::InterceptorHandle {
+        use crate::interceptor::TrafficInterceptor as _;
+        let mut config = crate::interceptor::mock::test_config();
+        config.start_held = held;
+        crate::interceptor::mock::MockInterceptor::new()
+            .start(config)
+            .expect("the mock backend starts")
+    }
+
+    #[test]
+    fn every_capture_crossing_command_records_exactly_one_gui_action() {
+        let (_runtime, mut core) = session_core();
+        let relay = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4434);
+        let dir = temp_dir("actions");
+        let _sink = lifecycle::install_test_sink(dir.clone());
+
+        // The game is unknown, so each start/restart fails after the invocation
+        // began; the audit is about the invocation, not about the backend. A
+        // plan failure is the honest "no capture happened" outcome here.
+        let _ = core.commands_mut().start_boost(
+            "not-a-game",
+            relay,
+            false,
+            4,
+            None,
+            None,
+            ActionSource::Button,
+            true,
+        );
+        let _ = core.commands_mut().start_boost(
+            "not-a-game",
+            relay,
+            false,
+            4,
+            None,
+            None,
+            ActionSource::Auto,
+            true,
+        );
+        core.commands_mut()
+            .stop_boost_from(ActionSource::Tray)
+            .expect("a stop with no capture run is clean");
+        let _ = core.commands_mut().restart_boost(
+            "not-a-game",
+            relay,
+            false,
+            4,
+            None,
+            None,
+            ActionSource::Button,
+            true,
+        );
+        core.commands_mut()
+            .shutdown(ActionSource::System)
+            .expect("a fresh engine shuts down cleanly");
+        core.commands_mut().record_update_install();
+
+        let actions: Vec<(String, String, String, String, String)> = gui_actions(&dir)
+            .into_iter()
+            .map(|event| {
+                (
+                    event["action"].as_str().unwrap_or_default().to_string(),
+                    event["source"].as_str().unwrap_or_default().to_string(),
+                    event["from"].as_str().unwrap_or_default().to_string(),
+                    event["to"].as_str().unwrap_or_default().to_string(),
+                    event["command_id"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        let expected = vec![
+            (
+                "optimize".to_string(),
+                "button".to_string(),
+                "idle".to_string(),
+                "idle".to_string(),
+                "StartBoost".to_string(),
+            ),
+            (
+                "optimize".to_string(),
+                "auto".to_string(),
+                "idle".to_string(),
+                "idle".to_string(),
+                "StartBoost".to_string(),
+            ),
+            (
+                "stop".to_string(),
+                "tray".to_string(),
+                "idle".to_string(),
+                "idle".to_string(),
+                "StopBoost".to_string(),
+            ),
+            (
+                "restart".to_string(),
+                "button".to_string(),
+                "idle".to_string(),
+                "idle".to_string(),
+                "StartBoost".to_string(),
+            ),
+            (
+                "quit".to_string(),
+                "system".to_string(),
+                "idle".to_string(),
+                "shutdown".to_string(),
+                "quit".to_string(),
+            ),
+            (
+                "update_install".to_string(),
+                "system".to_string(),
+                "idle".to_string(),
+                "shutdown".to_string(),
+                "update".to_string(),
+            ),
+        ];
+        assert_eq!(
+            actions, expected,
+            "one gui.action per capture-crossing invocation, with the source and transition"
+        );
+    }
+
+    #[test]
+    fn a_refused_start_records_one_action_and_leaves_the_healthy_run_alone() {
+        let (_runtime, mut core) = session_core();
+        let relay = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 4434);
+        let dir = temp_dir("refused");
+        let _sink = lifecycle::install_test_sink(dir.clone());
+
+        // A healthy run already exists, exactly as it does when a stale UI tries
+        // to Optimize over a live session.
+        core.engine()
+            .lock()
+            .expect("engine")
+            .install_mock_interceptor_for_test(healthy_mock_handle(false));
+        assert!(core.status().interceptor_active);
+
+        let error = core
+            .commands_mut()
+            .start_boost(
+                "not-a-game",
+                relay,
+                false,
+                4,
+                None,
+                None,
+                ActionSource::Button,
+                true,
+            )
+            .expect_err("a start over a healthy run must be refused");
+        assert_eq!(
+            error.detail.as_deref(),
+            Some(crate::engine::ALREADY_INTERCEPTING),
+            "the command carries the engine's typed refusal verbatim"
+        );
+        assert!(
+            core.status().interceptor_active,
+            "the refused start must not tear the healthy run down"
+        );
+
+        let actions = gui_actions(&dir);
+        assert_eq!(
+            actions.len(),
+            1,
+            "the refusal is recorded exactly once, not once per attempted step"
+        );
+        assert_eq!(actions[0]["action"], "optimize");
+        assert_eq!(actions[0]["source"], "button");
+        assert_eq!(
+            actions[0]["from"], actions[0]["to"],
+            "a refused start leaves the capture plane exactly where it was"
+        );
+        assert_eq!(actions[0]["from"], "capturing");
+        assert_eq!(actions[0]["command_id"], "StartBoost");
     }
 }

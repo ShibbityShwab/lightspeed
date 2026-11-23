@@ -21,6 +21,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use lightspeed_client::app::lifecycle::PresenceCause;
+
 use super::*;
 
 /// How often to scan the process table for a game appearing or exiting.
@@ -42,6 +44,114 @@ pub(super) fn presence_scan_allowed(
     has_process_target: bool,
 ) -> bool {
     game_auto && !game_manual && !has_process_target
+}
+
+/// One finished presence scan, as the worker publishes it.
+///
+/// The three-way shape is deliberate (P0-1): a failed scan is **not** evidence
+/// that the game exited, so it must never be labelled `process_exited`. Today's
+/// shared detector fails open on process-enumeration errors and reports "no
+/// supported game" for both a failed scan and a clean absence
+/// (`client/src/games/mod.rs`, audit F7), so production detection can only
+/// produce `Present`/`Absent`; the three-way channel is what P1-3's real scan
+/// result plugs into without re-plumbing the worker, and the cause mapping
+/// already refuses to turn an `Error` into a process exit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PresenceScan {
+    /// A supported game is running; the GUI catalogue key.
+    Present(String),
+    /// The scan ran and found no supported game.
+    Absent,
+    /// The scan itself failed: unknown, never "not present".
+    ///
+    /// Today's detector fails open and reports a failed enumeration as a clean
+    /// absence (audit F7), so production detection cannot construct this
+    /// variant yet; it is the contract P1-3's real three-way result plugs into,
+    /// and the cause-mapping tests pin that it can never become a process exit.
+    /// The applied UI result already treats it exactly like `Absent`.
+    #[allow(dead_code)]
+    Error,
+}
+
+/// One published scan: what it found and how long the scan took.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PresenceUpdate {
+    pub(super) scan: PresenceScan,
+    pub(super) scan_ms: u64,
+}
+
+/// The game the applied UI state sees for a scan result.
+///
+/// Identical to the behaviour before P0-1: only a `Present` scan yields a game,
+/// so a scan failure still applies as "no game" and can never auto-start.
+pub(super) fn presence_detected(scan: &PresenceScan) -> Option<String> {
+    match scan {
+        PresenceScan::Present(game) => Some(game.clone()),
+        PresenceScan::Absent | PresenceScan::Error => None,
+    }
+}
+
+/// The cause to record for a finished scan, or `None` when it changed nothing.
+///
+/// `previous` is the game key the UI held before this scan, and
+/// `scan_failed_before` the previous scan's outcome, so a persistent failure is
+/// recorded once per streak rather than every 5 s.
+pub(super) fn presence_cause(
+    previous: Option<&str>,
+    scan: &PresenceScan,
+    scan_failed_before: bool,
+) -> Option<PresenceCause> {
+    match scan {
+        PresenceScan::Present(game) => match previous {
+            None => Some(PresenceCause::ProcessStarted),
+            Some(previous) if previous == game => None,
+            Some(_) => Some(PresenceCause::NameMatch),
+        },
+        // A clean "no game" is an exit only when a game was present; absent
+        // after absent is the steady state, not a transition.
+        PresenceScan::Absent => previous.map(|_| PresenceCause::ProcessExited),
+        // A failed scan applies as absent, but it is NOT an exit: the first
+        // failure in a streak is recorded as scan_error, repeats are folded.
+        PresenceScan::Error => {
+            if previous.is_some() || !scan_failed_before {
+                Some(PresenceCause::ScanError)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Why scanning was turned off: the user pinned a choice or left Auto mode.
+///
+/// A picked process target and a pinned game are the user's explicit choice
+/// (`manual_pick`); "Manual / Custom…" hands routing to a typed server and is a
+/// mode change (`disabled`).
+pub(super) fn scan_disabled_cause(
+    game_manual: bool,
+    has_process_target: bool,
+    game_auto: bool,
+) -> PresenceCause {
+    if has_process_target || (!game_manual && !game_auto) {
+        PresenceCause::ManualPick
+    } else {
+        PresenceCause::Disabled
+    }
+}
+
+/// The auto-start latch state carried by a `presence` record.
+pub(super) fn presence_latch(set: bool) -> String {
+    if set {
+        "set".to_string()
+    } else {
+        "cleared".to_string()
+    }
+}
+
+/// The presence-state token carried by a `presence` record: the game key, or
+/// `"none"` when no game is present (the existing trace sentence's vocabulary).
+pub(super) fn presence_token(game: Option<&str>) -> String {
+    game.map_or_else(|| "none".to_string(), str::to_string)
 }
 
 /// The fixed-rate scan schedule the watcher follows.
@@ -113,7 +223,7 @@ pub(super) struct GamePresence {
     /// Finished scans. The worker sends one per completed scan; the UI applies
     /// only the newest, because a scan describes "now" and a backlog would act
     /// on the past.
-    updates: Receiver<Option<String>>,
+    updates: Receiver<PresenceUpdate>,
     /// Mode and lifecycle messages. A send also wakes a sleeping worker.
     control: Sender<PresenceCommand>,
     /// The worker, joined by [`Self::shutdown`].
@@ -125,17 +235,14 @@ pub(super) struct GamePresence {
 impl GamePresence {
     /// Start the watcher with the real detection function.
     pub(super) fn spawn() -> Self {
-        Self::spawn_with(GAME_PRESENCE_INTERVAL, try_auto_detect_game)
+        Self::spawn_with(GAME_PRESENCE_INTERVAL, detect_presence)
     }
 
     /// Start a watcher around `detect`, on a fixed `interval`.
     ///
     /// Parameterised so the unit tests can drive the loop with a short interval
     /// and an instrumented detection closure instead of spawning `tasklist`.
-    fn spawn_with(
-        interval: Duration,
-        detect: impl Fn() -> Option<String> + Send + 'static,
-    ) -> Self {
+    fn spawn_with(interval: Duration, detect: impl Fn() -> PresenceScan + Send + 'static) -> Self {
         let (updates_tx, updates) = mpsc::channel();
         let (control, control_rx) = mpsc::channel();
         let handle = std::thread::spawn(move || run(updates_tx, control_rx, interval, detect));
@@ -159,7 +266,7 @@ impl GamePresence {
 
     /// The newest finished scan, or `None` if nothing landed since the last
     /// call. Any older result is discarded: only the latest presence matters.
-    pub(super) fn latest(&self) -> Option<Option<String>> {
+    pub(super) fn latest(&self) -> Option<PresenceUpdate> {
         let mut newest = self.updates.try_recv().ok()?;
         while let Ok(next) = self.updates.try_recv() {
             newest = next;
@@ -197,13 +304,27 @@ impl Drop for GamePresence {
     }
 }
 
+/// The production detection call behind [`GamePresence::spawn`].
+///
+/// See [`PresenceScan`] for why a failed scan is not observable at this seam
+/// yet: the shared detector fails open and reports a clean absence with the
+/// same error as a failed scan. The wrapper exists so the worker's contract is
+/// three-way today and the detector's real result can be wired in without
+/// touching the channel.
+fn detect_presence() -> PresenceScan {
+    match try_auto_detect_game() {
+        Some(game) => PresenceScan::Present(game),
+        None => PresenceScan::Absent,
+    }
+}
+
 /// The watcher loop: sleep until the next scan is due or a message arrives, scan
 /// only while enabled, and publish each result.
 fn run(
-    updates: Sender<Option<String>>,
+    updates: Sender<PresenceUpdate>,
     control: Receiver<PresenceCommand>,
     interval: Duration,
-    detect: impl Fn() -> Option<String>,
+    detect: impl Fn() -> PresenceScan,
 ) {
     let mut enabled = false;
     let mut schedule = PresenceSchedule::due_now();
@@ -225,9 +346,10 @@ fn run(
             continue;
         }
         let started = Instant::now();
-        let detected = detect();
+        let scan = detect();
+        let scan_ms = started.elapsed().as_millis() as u64;
         schedule.started(started, interval);
-        if updates.send(detected).is_err() {
+        if updates.send(PresenceUpdate { scan, scan_ms }).is_err() {
             break;
         }
     }
@@ -348,7 +470,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let mut presence = GamePresence::spawn_with(Duration::from_millis(10), move || {
             let _ = tx.send(std::thread::current().id());
-            None
+            PresenceScan::Absent
         });
         presence.set_enabled(true);
         let worker = rx
@@ -381,7 +503,7 @@ mod tests {
                 // the case that could pile duplicates onto the queue.
                 std::thread::sleep(Duration::from_millis(30));
                 in_flight.fetch_sub(1, Ordering::SeqCst);
-                None
+                PresenceScan::Absent
             })
         };
         presence.set_enabled(true);
@@ -408,7 +530,7 @@ mod tests {
             let scans = Arc::clone(&scans);
             GamePresence::spawn_with(Duration::from_millis(10), move || {
                 scans.fetch_add(1, Ordering::SeqCst);
-                None
+                PresenceScan::Absent
             })
         };
         // Several intervals' worth of loop iterations with no `set_enabled`.
@@ -430,7 +552,7 @@ mod tests {
             let scans = Arc::clone(&scans);
             GamePresence::spawn_with(Duration::from_millis(200), move || {
                 scans.fetch_add(1, Ordering::SeqCst);
-                None
+                PresenceScan::Absent
             })
         };
         presence.set_enabled(true);
@@ -461,7 +583,7 @@ mod tests {
             let scans = Arc::clone(&scans);
             GamePresence::spawn_with(Duration::from_millis(10), move || {
                 scans.fetch_add(1, Ordering::SeqCst);
-                None
+                PresenceScan::Absent
             })
         };
         presence.set_enabled(true);
@@ -478,5 +600,141 @@ mod tests {
             "the joined worker was still scanning after shutdown"
         );
         presence.shutdown();
+    }
+
+    // ── P0-1: the three-way scan result and its cause mapping (presence) ──
+
+    /// The applied UI result is unchanged by the three-way type: only `Present`
+    /// yields a game, so a scan failure is still "no game" for every downstream
+    /// decision (an error must never auto-start, exactly as before).
+    #[test]
+    fn only_a_present_scan_yields_a_game_for_the_applied_result() {
+        assert_eq!(
+            presence_detected(&PresenceScan::Present("robrun".to_string())),
+            Some("robrun".to_string())
+        );
+        assert_eq!(presence_detected(&PresenceScan::Absent), None);
+        assert_eq!(
+            presence_detected(&PresenceScan::Error),
+            None,
+            "a failed scan applies as no game (and therefore never auto-starts)"
+        );
+    }
+
+    /// The cause vocabulary: each transition names itself, and a failed scan is
+    /// `scan_error` - never `process_exited`, even though it applies as absent.
+    #[test]
+    fn presence_causes_name_each_transition_and_never_turn_an_error_into_an_exit() {
+        let present = PresenceScan::Present("robrun".to_string());
+        assert_eq!(
+            presence_cause(None, &present, false),
+            Some(PresenceCause::ProcessStarted)
+        );
+        assert_eq!(
+            presence_cause(Some("robrun"), &present, false),
+            None,
+            "the same game on the next scan is not a transition"
+        );
+        assert_eq!(
+            presence_cause(Some("cs2"), &present, false),
+            Some(PresenceCause::NameMatch),
+            "a different detected game is a name match"
+        );
+
+        assert_eq!(
+            presence_cause(Some("robrun"), &PresenceScan::Absent, false),
+            Some(PresenceCause::ProcessExited)
+        );
+        assert_eq!(
+            presence_cause(None, &PresenceScan::Absent, false),
+            None,
+            "absent after absent is the steady state"
+        );
+
+        assert_eq!(
+            presence_cause(Some("robrun"), &PresenceScan::Error, false),
+            Some(PresenceCause::ScanError),
+            "a failed scan after a present game is scan_error, not process_exited"
+        );
+        assert_eq!(
+            presence_cause(None, &PresenceScan::Error, false),
+            Some(PresenceCause::ScanError),
+            "the first failure in a streak is recorded"
+        );
+        assert_eq!(
+            presence_cause(None, &PresenceScan::Error, true),
+            None,
+            "repeated failures already recorded are folded"
+        );
+        assert_ne!(
+            presence_cause(Some("robrun"), &PresenceScan::Error, false),
+            Some(PresenceCause::ProcessExited),
+            "an error must never be labelled a process exit"
+        );
+    }
+
+    /// Leaving Auto is logged once, with the reason the user gave: a picked
+    /// process/pinned game is `manual_pick`, "Manual / Custom…" is `disabled`.
+    #[test]
+    fn scan_disabled_causes_distinguish_a_pick_from_manual_mode() {
+        assert_eq!(
+            scan_disabled_cause(false, true, true),
+            PresenceCause::ManualPick,
+            "a picked process target is the user's explicit choice"
+        );
+        assert_eq!(
+            scan_disabled_cause(false, false, false),
+            PresenceCause::ManualPick,
+            "a pinned game is the user's explicit choice"
+        );
+        assert_eq!(
+            scan_disabled_cause(true, false, false),
+            PresenceCause::Disabled,
+            "Manual / Custom mode is a mode change, not a pick"
+        );
+    }
+
+    /// The latch token is the closed pair the schema names.
+    #[test]
+    fn the_latch_token_is_set_or_cleared() {
+        assert_eq!(presence_latch(true), "set");
+        assert_eq!(presence_latch(false), "cleared");
+    }
+
+    /// The `from`/`to` token of a presence record is the game key or `"none"`,
+    /// the same vocabulary the existing `Game presence changed:` sentence uses.
+    #[test]
+    fn presence_tokens_name_the_game_or_none() {
+        assert_eq!(presence_token(Some("robrun")), "robrun");
+        assert_eq!(presence_token(None), "none");
+    }
+
+    /// The worker publishes the new fields: the three-way scan and the duration
+    /// the scan took, which is what the `presence` record carries as `scan_ms`.
+    #[test]
+    fn a_scan_publishes_its_result_and_duration() {
+        let mut presence = GamePresence::spawn_with(Duration::from_millis(5), || {
+            std::thread::sleep(Duration::from_millis(25));
+            PresenceScan::Present("robrun".to_string())
+        });
+        presence.set_enabled(true);
+        let deadline = Instant::now() + RECV_TIMEOUT;
+        let update = loop {
+            if let Some(update) = presence.latest() {
+                break update;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the enabled watcher never produced a scan"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        presence.shutdown();
+        assert_eq!(update.scan, PresenceScan::Present("robrun".to_string()));
+        assert!(
+            update.scan_ms >= 20,
+            "scan_ms must cover the scan that ran, got {} ms",
+            update.scan_ms
+        );
     }
 }

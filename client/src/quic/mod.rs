@@ -1014,6 +1014,7 @@ mod supervisor {
     use lightspeed_protocol::control::{caps, ControlMessage};
 
     use super::inner::{AlpnMemory, ControlClient};
+    use crate::app::lifecycle::SessionCloseReason;
     use crate::error::QuicError;
 
     pub(super) const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -1025,10 +1026,17 @@ mod supervisor {
     const TELEMETRY_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// First-attempt outcome awaited by [`register_session`](super::register_session).
+    ///
+    /// `Done(token)` is a real result. `Discarded` is the P0-3 settlement: the
+    /// supervisor was retired (a newly learned destination replaced it) or
+    /// stopped before its first attempt completed, so the result is not a
+    /// failure for presentation — it is superseded, and the engine discards it
+    /// without touching `registration_error` (invariant I5).
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) enum Initial {
         Pending,
         Done(u32),
+        Discarded(SessionCloseReason),
     }
 
     /// A live control connection plus the capabilities the relay advertised in
@@ -1147,7 +1155,7 @@ mod supervisor {
         control_port: u16,
         destination: Option<Ipv4Addr>,
         path_mtu_cap: usize,
-    ) -> watch::Receiver<Initial> {
+    ) -> (u64, watch::Receiver<Initial>) {
         let mut registry = lock_registry();
         if let Some(entry) = registry.get(&data_addr) {
             if !entry.handle.stopped.load(Ordering::Acquire) {
@@ -1158,7 +1166,7 @@ mod supervisor {
                 if (destination.is_none() || known == destination)
                     && entry.path_mtu_cap == path_mtu_cap
                 {
-                    return entry.initial_rx.clone();
+                    return (entry.handle.generation, entry.initial_rx.clone());
                 }
             }
         }
@@ -1214,7 +1222,7 @@ mod supervisor {
                 _join: join,
             },
         );
-        initial_rx
+        (generation, initial_rx)
     }
 
     /// Await the first registration outcome for `data_addr`, spawning the
@@ -1226,14 +1234,53 @@ mod supervisor {
         destination: Option<Ipv4Addr>,
         path_mtu_cap: usize,
     ) -> Option<u32> {
-        let mut initial_rx = ensure_supervisor(data_addr, control_port, destination, path_mtu_cap);
+        let attempt =
+            register_and_wait_attempt(data_addr, control_port, destination, path_mtu_cap).await;
+        attempt.session
+    }
+
+    /// Await the first registration outcome with its generation and supersede
+    /// verdict (P0-3). The engine's generation guard consumes this instead of
+    /// mapping every non-`Ok` to a failure.
+    pub(super) async fn register_and_wait_attempt(
+        data_addr: SocketAddrV4,
+        control_port: u16,
+        destination: Option<Ipv4Addr>,
+        path_mtu_cap: usize,
+    ) -> super::RegistrationAttemptResult {
+        let (generation, mut initial_rx) =
+            ensure_supervisor(data_addr, control_port, destination, path_mtu_cap);
         if matches!(*initial_rx.borrow(), Initial::Pending) {
             let _ = initial_rx.changed().await;
         }
         let outcome = *initial_rx.borrow();
         match outcome {
-            Initial::Done(token) if token != 0 => Some(token),
-            _ => None,
+            Initial::Done(token) if token != 0 => super::RegistrationAttemptResult {
+                generation,
+                outcome: crate::app::lifecycle::RegistrationOutcome::Ok,
+                session: Some(token),
+                close_reason: None,
+            },
+            Initial::Done(_) => super::RegistrationAttemptResult {
+                generation,
+                outcome: crate::app::lifecycle::RegistrationOutcome::Fail,
+                session: None,
+                close_reason: None,
+            },
+            // Retired/stopped before the first attempt completed: not a failure
+            // (invariant I5). The engine records `superseded`, never an error.
+            Initial::Discarded(reason) => super::RegistrationAttemptResult {
+                generation,
+                outcome: crate::app::lifecycle::RegistrationOutcome::Superseded,
+                session: None,
+                close_reason: Some(reason),
+            },
+            Initial::Pending => super::RegistrationAttemptResult {
+                generation,
+                outcome: crate::app::lifecycle::RegistrationOutcome::Superseded,
+                session: None,
+                close_reason: Some(SessionCloseReason::Unknown),
+            },
         }
     }
 
@@ -1294,6 +1341,21 @@ mod supervisor {
     /// Whether a live supervisor is managing `data_addr`.
     pub fn is_supervised(data_addr: SocketAddrV4) -> bool {
         supervisor_handle(data_addr).is_some_and(|handle| !handle.stopped.load(Ordering::Acquire))
+    }
+
+    /// The live supervisor's registration for `data_addr`: its generation and
+    /// the current non-zero token, when it is registered (P0-3).
+    ///
+    /// This is the authoritative "the current generation succeeded" fact the
+    /// engine's snapshot reconciles against, so a replacement registration that
+    /// nobody awaited still has a writer (invariant I5).
+    pub fn supervised_registration(data_addr: SocketAddrV4) -> Option<(u64, u32)> {
+        let handle = supervisor_handle(data_addr)?;
+        if handle.stopped.load(Ordering::Acquire) {
+            return None;
+        }
+        let token = handle.current_token.load(Ordering::Acquire);
+        (token != 0).then_some((handle.generation, token))
     }
 
     /// The most recent token a supervisor's relay issued, if any.
@@ -1405,7 +1467,19 @@ mod supervisor {
 
         clear_target(data_addr, generation, &target);
         if first_attempt {
-            let _ = initial_tx.send_replace(Initial::Done(0));
+            // P0-3: the first attempt never completed. Distinguish a retired
+            // generation (a replacement supervisor now owns the relay) from a
+            // deliberate stop; neither is a registration failure, and the
+            // generation guard needs the reason so the ledger can close it.
+            let replaced = lock_registry()
+                .get(&data_addr)
+                .is_some_and(|entry| entry.handle.generation != generation);
+            let reason = if replaced {
+                SessionCloseReason::SessionReplaced
+            } else {
+                SessionCloseReason::ClientQuit
+            };
+            let _ = initial_tx.send_replace(Initial::Discarded(reason));
         }
         debug!(relay = %data_addr, "control-plane supervisor stopped");
     }
@@ -1844,6 +1918,24 @@ mod supervisor {
 #[cfg(feature = "quic")]
 pub use supervisor::SupervisorHandle;
 
+/// The first-attempt outcome of a supervised registration, with the facts
+/// P0-3's generation guard needs (roadmap D4 item 1).
+///
+/// A retired or stopped supervisor's first attempt is `Superseded`, not a
+/// failure: the engine records it as discarded and never writes
+/// `registration_error` (invariant I5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RegistrationAttemptResult {
+    /// The supervisor generation this result belongs to.
+    pub generation: u64,
+    /// What the first attempt did.
+    pub outcome: crate::app::lifecycle::RegistrationOutcome,
+    /// The relay-issued token on success.
+    pub session: Option<u32>,
+    /// Why the session ended, when the result is a discarded one.
+    pub close_reason: Option<crate::app::lifecycle::SessionCloseReason>,
+}
+
 #[cfg(feature = "quic")]
 pub fn ensure_registration(
     data_addr: std::net::SocketAddrV4,
@@ -1996,6 +2088,85 @@ pub async fn register_session_with_destination(
 ) -> Option<u32> {
     register_session_with_destination_inner(data_addr, control_port, destination, path_mtu_cap)
         .await
+}
+
+/// [`register_session`] with the generation and supersede verdict the engine's
+/// state machine consumes (P0-3).
+pub async fn register_session_attempt(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    register_session_attempt_inner(data_addr, control_port, path_mtu_cap).await
+}
+
+/// [`register_session_with_destination`] with the generation/supersede facts.
+pub async fn register_session_with_destination_attempt(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    destination: Option<std::net::Ipv4Addr>,
+    path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    register_session_with_destination_attempt_inner(
+        data_addr,
+        control_port,
+        destination,
+        path_mtu_cap,
+    )
+    .await
+}
+
+/// The live supervisor's registration for `data_addr`, when it has one.
+pub fn supervised_registration(data_addr: std::net::SocketAddrV4) -> Option<(u64, u32)> {
+    supervised_registration_inner(data_addr)
+}
+
+#[cfg(feature = "quic")]
+async fn register_session_attempt_inner(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    supervisor::register_and_wait_attempt(data_addr, control_port, None, path_mtu_cap).await
+}
+
+#[cfg(feature = "quic")]
+async fn register_session_with_destination_attempt_inner(
+    data_addr: std::net::SocketAddrV4,
+    control_port: u16,
+    destination: Option<std::net::Ipv4Addr>,
+    path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    supervisor::register_and_wait_attempt(data_addr, control_port, destination, path_mtu_cap).await
+}
+
+#[cfg(feature = "quic")]
+fn supervised_registration_inner(data_addr: std::net::SocketAddrV4) -> Option<(u64, u32)> {
+    supervisor::supervised_registration(data_addr)
+}
+
+#[cfg(not(feature = "quic"))]
+async fn register_session_attempt_inner(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+    _path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    RegistrationAttemptResult::default()
+}
+
+#[cfg(not(feature = "quic"))]
+async fn register_session_with_destination_attempt_inner(
+    _data_addr: std::net::SocketAddrV4,
+    _control_port: u16,
+    _destination: Option<std::net::Ipv4Addr>,
+    _path_mtu_cap: usize,
+) -> RegistrationAttemptResult {
+    RegistrationAttemptResult::default()
+}
+
+#[cfg(not(feature = "quic"))]
+fn supervised_registration_inner(_data_addr: std::net::SocketAddrV4) -> Option<(u64, u32)> {
+    None
 }
 
 #[cfg(feature = "quic")]

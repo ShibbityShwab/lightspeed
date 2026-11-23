@@ -460,15 +460,19 @@ mod inner {
         }
     }
 
-    /// Log a WinDivert open failure, calling out stale WFP state when the OS
-    /// reports `FWP_E_IN_USE` so the fix (cold shutdown or killing the stale
-    /// process) is visible next to the raw error.
+    /// Log a WinDivert open failure.
+    ///
+    /// `FWP_E_IN_USE` means a WFP object is still referenced (a previous
+    /// process's filter, or a concurrent callout registration); the error code
+    /// does not identify the holder, so this states the condition instead of a
+    /// guessed cause.
     fn log_open_failure(err: &std::io::Error) {
         if is_fwp_in_use(err) {
             tracing::error!(
-                "❌ WinDivert open failed: {err}. A previous LightSpeed run left its \
-                 WFP filter/callout registered; do a full cold shutdown or close the \
-                 stale LightSpeed process, then try again."
+                "❌ WinDivert open failed: {err}. A WFP object is still referenced \
+                 (a previous process's filter, or a callout being \
+                 registered/unregistered concurrently); the error code does not \
+                 identify the holder."
             );
         } else {
             tracing::error!("❌ WinDivert open failed: {err}");

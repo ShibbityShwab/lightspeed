@@ -17,6 +17,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
+pub use crate::app::lifecycle::ErrorSource;
 use crate::{EngineStatus, ScoredRelay};
 
 // ── Engine / route facts ────────────────────────────────────────────────────
@@ -406,12 +407,24 @@ pub enum SessionCommand {
 /// source. Today `start_boost`/`stop_boost` are synchronous, so `in_flight` is
 /// set and cleared inside the call; W2-3a's `SessionCommand` adoption makes it
 /// span frames. The DTO is the same either way — the shell renders it.
+///
+/// P0-3 (roadmap D4 item 3): the recorded error is a typed record carrying its
+/// source, epoch and clear rule, and **it does not latch for the process
+/// lifetime**. A later success of the same command clears it (the user's retry),
+/// a same-source recovery clears it, and [`Self::clear_error`] is the explicit
+/// dismissal. The field incident's second sticky path was this error never
+/// clearing (`docs/audit/game-transition-state-machine-2026-11-23.md` §3.5/F5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionCommandState {
     /// The command currently being issued, if any.
     pub in_flight: Option<SessionCommand>,
     /// The last command that failed (the Error row source).
     pub last_error: Option<AppError>,
+    /// The command whose failure `last_error` records, so a later success of
+    /// **that** command can clear it without hiding another command's error.
+    pub last_error_command: Option<SessionCommand>,
+    /// Monotonic epoch source for command error records.
+    next_epoch: u64,
 }
 
 impl SessionCommandState {
@@ -421,24 +434,44 @@ impl SessionCommandState {
         self.in_flight = Some(command);
     }
 
-    /// The command finished successfully: clear the in-flight marker.
-    pub fn finish(&mut self, command: SessionCommand) {
+    /// The command finished successfully: clear the in-flight marker and, when
+    /// this very command failed last, clear its error. Returns whether an error
+    /// was cleared (the caller records the `ui_error clear` transition).
+    pub fn finish(&mut self, command: SessionCommand) -> bool {
         if self.in_flight == Some(command) {
             self.in_flight = None;
+        }
+        self.clear_error_for(command)
+    }
+
+    /// Clear the recorded error when `command` is the one that failed.
+    pub fn clear_error_for(&mut self, command: SessionCommand) -> bool {
+        if self.last_error.is_some() && self.last_error_command == Some(command) {
+            self.last_error = None;
+            self.last_error_command = None;
+            true
+        } else {
+            false
         }
     }
 
-    /// The command failed: clear the in-flight marker and record the error.
-    pub fn fail(&mut self, command: SessionCommand, error: AppError) {
+    /// The command failed: clear the in-flight marker and record the error at a
+    /// fresh epoch with the command-clear rule.
+    pub fn fail(&mut self, command: SessionCommand, mut error: AppError) {
         if self.in_flight == Some(command) {
             self.in_flight = None;
         }
+        self.next_epoch = self.next_epoch.saturating_add(1);
+        error.epoch = self.next_epoch;
+        error.auto_clear = ErrorClearRule::OnCommandSuccess;
         self.last_error = Some(error);
+        self.last_error_command = Some(command);
     }
 
-    /// Clear the recorded error (e.g. a successful retry).
+    /// Clear the recorded error (the explicit dismissal).
     pub fn clear_error(&mut self) {
         self.last_error = None;
+        self.last_error_command = None;
     }
 
     /// Clear a recorded error whose verbatim detail names a recovered
@@ -452,7 +485,154 @@ impl SessionCommandState {
             .is_some_and(|detail| detail.contains(needle));
         if matches {
             self.last_error = None;
+            self.last_error_command = None;
         }
+    }
+}
+
+/// How an error record is allowed to go away (P0-3 / roadmap D4 item 3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ErrorClearRule {
+    /// A same-source healthy result at the same or a newer epoch clears it
+    /// (invariant I6).
+    #[default]
+    OnRecovery,
+    /// The success of the command that failed clears it.
+    OnCommandSuccess,
+    /// Only an explicit dismissal clears it (a latch with a named remedy).
+    Latched,
+}
+
+/// One typed, epoch-stamped error record (P0-3 / roadmap D4 item 3).
+///
+/// `source` is the subsystem that failed, `epoch` is monotonic **per plane**, and
+/// `auto_clear` names how the record may disappear. A record is never a
+/// process-lifetime latch unless it says so, and even a latched one names the
+/// healthy result that clears it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ErrorRecord {
+    /// The subsystem that failed.
+    pub source: ErrorSource,
+    /// The source plane's monotonic epoch for this failure.
+    pub epoch: u64,
+    /// The taxonomy kind the Error row leads with.
+    pub kind: AppErrorKind,
+    /// The verbatim diagnostic behind `Details`.
+    pub detail: Option<String>,
+    /// How the record may clear.
+    pub auto_clear: ErrorClearRule,
+    /// Whether this is the latched capture fault (the only error that may use
+    /// the ERROR word while a capture run is live, invariant I7).
+    pub latched: bool,
+}
+
+impl ErrorRecord {
+    /// The same record as a renderable [`AppError`].
+    pub fn as_app_error(&self) -> AppError {
+        AppError {
+            kind: self.kind,
+            detail: self.detail.clone(),
+            source: self.source,
+            epoch: self.epoch,
+            auto_clear: self.auto_clear,
+            latched: self.latched,
+        }
+    }
+}
+
+/// The shared status's error ledger: at most one record per source, each with
+/// its own epoch (P0-3 / invariant I6).
+///
+/// Replacement is deliberate: a newer failure of the same source replaces the
+/// older one instead of stacking cards, and a healthy result at the same or a
+/// newer epoch clears it. Records of *other* sources are never touched, which is
+/// the test-pinned rule that a recovery must not clear an unrelated error.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ErrorLedger {
+    records: Vec<ErrorRecord>,
+    next_epoch: u64,
+}
+
+impl ErrorLedger {
+    /// The next monotonic epoch. Callers that record and later recover a source
+    /// keep the same value so "same or newer epoch" can be tested.
+    pub fn next_epoch(&mut self) -> u64 {
+        self.next_epoch = self.next_epoch.saturating_add(1);
+        self.next_epoch
+    }
+
+    /// Record (or replace) one source's failure at a fresh epoch.
+    pub fn record(
+        &mut self,
+        source: ErrorSource,
+        kind: AppErrorKind,
+        detail: Option<String>,
+        auto_clear: ErrorClearRule,
+        latched: bool,
+    ) -> ErrorRecord {
+        let record = ErrorRecord {
+            source,
+            epoch: self.next_epoch(),
+            kind,
+            detail,
+            auto_clear,
+            latched,
+        };
+        self.records.retain(|existing| existing.source != source);
+        self.records.push(record.clone());
+        record
+    }
+
+    /// A healthy result for `source` at a new (newer) epoch clears that source's
+    /// record only. Returns the cleared record, for the `ui_error clear` event.
+    pub fn recovered(&mut self, source: ErrorSource) -> Option<ErrorRecord> {
+        let epoch = self.next_epoch();
+        self.clear_source(source, epoch)
+    }
+
+    /// Clear `source`'s record when it was recorded at `epoch` or older. A stale
+    /// (older) healthy result cannot clear a newer failure.
+    pub fn clear_source(&mut self, source: ErrorSource, epoch: u64) -> Option<ErrorRecord> {
+        let position = self
+            .records
+            .iter()
+            .position(|record| record.source == source && record.epoch <= epoch)?;
+        Some(self.records.remove(position))
+    }
+
+    /// Every live record, oldest first.
+    pub fn records(&self) -> &[ErrorRecord] {
+        &self.records
+    }
+
+    /// Whether any error is current.
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// The record the surface leads with: a latched capture fault first (it
+    /// alone may mask a live capture), then the newest of the rest.
+    pub fn current(&self) -> Option<&ErrorRecord> {
+        self.records
+            .iter()
+            .find(|record| record.latched)
+            .or_else(|| self.records.iter().max_by_key(|record| record.epoch))
+    }
+}
+
+/// The subsystem of one [`AppErrorKind`] (P0-3 / invariant I6).
+///
+/// One mapping, shared by the command-side emitter and the render-side record,
+/// so one visible failure has one source token in the trace.
+pub fn source_for_kind(kind: AppErrorKind) -> ErrorSource {
+    match kind {
+        AppErrorKind::Capture | AppErrorKind::Tunnel => ErrorSource::Capture,
+        AppErrorKind::Route | AppErrorKind::Validation | AppErrorKind::Io => {
+            ErrorSource::Registration
+        }
+        AppErrorKind::Config => ErrorSource::Config,
+        AppErrorKind::Game => ErrorSource::Game,
+        AppErrorKind::Unsupported => ErrorSource::Route,
     }
 }
 
@@ -479,12 +659,26 @@ pub enum AppErrorKind {
 
 /// One user-facing failure: a taxonomy kind plus the verbatim detail behind
 /// `Details`/the log. No `String` alone crosses the boundary as copy.
+///
+/// P0-3 (roadmap D4 item 3): the failure also carries the subsystem that
+/// produced it, its per-plane epoch and its clear rule, so a recovery can clear
+/// exactly what recovered. The rendered copy is unchanged — the sentence is
+/// still chosen by `kind`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppError {
     /// Which sentence the surface leads with.
     pub kind: AppErrorKind,
     /// The verbatim engine/diagnostic message, shown behind the disclosure.
     pub detail: Option<String>,
+    /// The subsystem that failed (the lifecycle `ui_error` vocabulary).
+    pub source: ErrorSource,
+    /// The source plane's monotonic epoch when the failure was recorded.
+    pub epoch: u64,
+    /// How the record may clear.
+    pub auto_clear: ErrorClearRule,
+    /// Whether this is the latched capture fault (only it may use the ERROR word
+    /// while a capture run is live, invariant I7).
+    pub latched: bool,
 }
 
 impl AppError {
@@ -497,22 +691,54 @@ impl AppError {
         Self {
             kind,
             detail: Some(detail.into()),
+            source: source_for_kind(kind),
+            epoch: 0,
+            auto_clear: ErrorClearRule::OnRecovery,
+            latched: false,
         }
     }
 
     /// The registry/QUIC registration failure (the Relay row retries it).
     pub fn registration(detail: impl Into<String>) -> Self {
-        Self::for_kind(AppErrorKind::Route, detail)
+        Self {
+            source: ErrorSource::Registration,
+            ..Self::for_kind(AppErrorKind::Route, detail)
+        }
     }
 
     /// A tunnel/interception failure (capture backends, interceptor start).
     pub fn tunnel(detail: impl Into<String>) -> Self {
-        Self::for_kind(AppErrorKind::Tunnel, detail)
+        Self {
+            source: ErrorSource::Capture,
+            ..Self::for_kind(AppErrorKind::Tunnel, detail)
+        }
     }
 
     /// The tolerant config loader's diagnostic: defaults are running.
     pub fn config(recovery: &super::config::ConfigRecovery) -> Self {
-        Self::for_kind(AppErrorKind::Config, recovery.reason.clone())
+        Self {
+            source: ErrorSource::Config,
+            ..Self::for_kind(AppErrorKind::Config, recovery.reason.clone())
+        }
+    }
+
+    /// The latched capture fault (P0-3 / `FAULT_LATCHED`): the one error that
+    /// may replace a live capture word. Cleared only by a successful start.
+    pub fn latched_capture(kind_detail: impl Into<String>, epoch: u64) -> Self {
+        Self {
+            kind: AppErrorKind::Capture,
+            detail: Some(kind_detail.into()),
+            source: ErrorSource::Capture,
+            epoch,
+            auto_clear: ErrorClearRule::Latched,
+            latched: true,
+        }
+    }
+
+    /// Attach the record's epoch (command records stamp their own).
+    pub fn with_epoch(mut self, epoch: u64) -> Self {
+        self.epoch = epoch;
+        self
     }
 }
 
@@ -640,15 +866,173 @@ mod tests {
         let error = AppError::tunnel("WSAEMSGSIZE");
         session.fail(SessionCommand::StartBoost, error.clone());
         assert_eq!(session.in_flight, None);
-        assert_eq!(session.last_error, Some(error));
+        assert_eq!(
+            session.last_error.as_ref().map(|record| record.kind),
+            Some(AppErrorKind::Tunnel)
+        );
+        assert_eq!(
+            session.last_error.as_ref().map(|record| record.epoch),
+            Some(1),
+            "the recorded failure is stamped with its source epoch"
+        );
+        assert_eq!(
+            session.last_error_command,
+            Some(SessionCommand::StartBoost),
+            "the record names the command whose success may clear it"
+        );
 
-        // A later success does not hide the recorded error: the Error row keeps
-        // its Details until the user retries (there is no silent clearing).
+        // P0-3: no process-lifetime latch. The same command succeeding is the
+        // user's retry, and it clears the card it created.
         session.begin(SessionCommand::StartBoost);
-        session.finish(SessionCommand::StartBoost);
-        assert!(session.last_error.is_some());
+        assert!(
+            session.finish(SessionCommand::StartBoost),
+            "a successful retry clears the recorded failure"
+        );
+        assert_eq!(session.last_error, None);
+
+        // ... and an explicit dismissal still clears a record that did not.
+        session.fail(
+            SessionCommand::SelectRelay,
+            AppError::registration("refused"),
+        );
         session.clear_error();
         assert_eq!(session.last_error, None);
+    }
+
+    #[test]
+    fn a_command_error_is_cleared_by_the_same_command_not_by_another() {
+        let mut session = SessionCommandState::default();
+        session.fail(
+            SessionCommand::SelectRelay,
+            AppError::registration("refused"),
+        );
+
+        session.begin(SessionCommand::StartBoost);
+        assert!(
+            !session.finish(SessionCommand::StartBoost),
+            "another command's success must not silently clear the relay failure"
+        );
+        assert_eq!(
+            session.last_error.as_ref().map(|error| error.kind),
+            Some(AppErrorKind::Route)
+        );
+
+        session.begin(SessionCommand::SelectRelay);
+        assert!(session.finish(SessionCommand::SelectRelay));
+        assert_eq!(session.last_error, None);
+    }
+
+    #[test]
+    fn command_failure_epochs_are_monotonic() {
+        let mut session = SessionCommandState::default();
+        session.fail(SessionCommand::StartBoost, AppError::tunnel("one"));
+        let first = session.last_error.as_ref().map(|error| error.epoch);
+        session.fail(SessionCommand::StartBoost, AppError::tunnel("two"));
+        let second = session.last_error.as_ref().map(|error| error.epoch);
+        assert_eq!(first, Some(1));
+        assert_eq!(second, Some(2), "a newer failure has a newer epoch");
+        assert_eq!(
+            session.last_error.as_ref().map(|error| error.auto_clear),
+            Some(ErrorClearRule::OnCommandSuccess),
+            "a command failure declares its own clear rule"
+        );
+        assert_eq!(
+            session.last_error.as_ref().map(|error| error.source),
+            Some(ErrorSource::Capture)
+        );
+    }
+
+    #[test]
+    fn an_error_ledger_clears_one_source_and_never_another() {
+        let mut ledger = ErrorLedger::default();
+        let capture = ledger.record(
+            ErrorSource::Capture,
+            AppErrorKind::Capture,
+            Some("WinDivert open failed".to_string()),
+            ErrorClearRule::Latched,
+            true,
+        );
+        let route = ledger.record(
+            ErrorSource::Registration,
+            AppErrorKind::Route,
+            Some("control-plane registration failed".to_string()),
+            ErrorClearRule::OnRecovery,
+            false,
+        );
+        assert!(capture.latched);
+        assert_eq!(route.epoch, capture.epoch + 1);
+        assert_eq!(ledger.records().len(), 2);
+        assert_eq!(
+            ledger.current().map(|record| record.source),
+            Some(ErrorSource::Capture),
+            "the latched fault leads"
+        );
+
+        // The route's recovery clears only the route record.
+        assert!(ledger.recovered(ErrorSource::Registration).is_some());
+        assert_eq!(ledger.records().len(), 1);
+        assert_eq!(ledger.records()[0].source, ErrorSource::Capture);
+
+        // A stale healthy result cannot clear a newer failure.
+        let newer = ledger.record(
+            ErrorSource::Registration,
+            AppErrorKind::Route,
+            Some("refused again".to_string()),
+            ErrorClearRule::OnRecovery,
+            false,
+        );
+        assert_eq!(
+            ledger.clear_source(ErrorSource::Registration, newer.epoch - 1),
+            None,
+            "a result older than the failure must not clear it"
+        );
+        assert_eq!(ledger.records().len(), 2);
+        // The same epoch is a healthy result at the same time: it clears.
+        assert!(ledger
+            .clear_source(ErrorSource::Registration, newer.epoch)
+            .is_some());
+        assert_eq!(
+            ledger.records().len(),
+            1,
+            "the capture fault is untouched by the route's recovery"
+        );
+        assert_eq!(ledger.records()[0].source, ErrorSource::Capture);
+    }
+
+    #[test]
+    fn recording_the_same_source_replaces_instead_of_stacking() {
+        let mut ledger = ErrorLedger::default();
+        ledger.record(
+            ErrorSource::Capture,
+            AppErrorKind::Capture,
+            Some("first".to_string()),
+            ErrorClearRule::Latched,
+            true,
+        );
+        let second = ledger.record(
+            ErrorSource::Capture,
+            AppErrorKind::Capture,
+            Some("second".to_string()),
+            ErrorClearRule::Latched,
+            true,
+        );
+        assert_eq!(ledger.records().len(), 1, "one record per source");
+        assert_eq!(ledger.records()[0].detail.as_deref(), Some("second"));
+        assert!(second.epoch > 1);
+    }
+
+    #[test]
+    fn a_latched_capture_fault_is_the_one_error_that_may_mask_a_live_capture() {
+        let fault = AppError::latched_capture("windivert_open: 0x8032000A", 7);
+        assert!(fault.latched);
+        assert_eq!(fault.auto_clear, ErrorClearRule::Latched);
+        assert_eq!(fault.source, ErrorSource::Capture);
+        assert_eq!(fault.kind, AppErrorKind::Capture);
+        assert_eq!(fault.epoch, 7);
+        // A command failure is never latched.
+        let command = AppError::tunnel("WSAEMSGSIZE");
+        assert!(!command.latched);
+        assert_eq!(command.auto_clear, ErrorClearRule::OnRecovery);
     }
 
     #[test]

@@ -32,7 +32,8 @@
 use lightspeed_client::app::dto::{
     AppErrorKind, AppStatus, ClientRoute, LocationRung, RelayedPair, ServerLegState, TrayState,
 };
-use lightspeed_client::app::status::{action_slot, ActionSlot};
+use lightspeed_client::app::lifecycle::ErrorSource;
+use lightspeed_client::app::status::{action_slot, error_word_for, ActionSlot};
 
 // ── The model ──────────────────────────────────────────────────────────────
 
@@ -254,10 +255,18 @@ pub fn route_surface(status: &AppStatus) -> RouteSurface {
     let warning = status.watchdog.warning.filter(|_| boosting);
     let word = word_for(status, boosting, warning.is_some());
     // The Error row's sub-line is the taxonomy sentence (spec §2.2 row 8); the
-    // same sentence is repeated behind Details with its verbatim detail.
-    let subline = match status.error.as_ref() {
-        Some(error) => Some(error_line(error)),
-        None => subline_for(status, boosting, warning.is_some()),
+    // same sentence is repeated behind Details with its verbatim detail. It is
+    // the hero readout **only** when the card owns the word (P0-3 / I7): while a
+    // live capture keeps its word, the readout stays the live route and the
+    // failure renders as the banner below.
+    let subline = if word == RouteWord::Error {
+        status
+            .error
+            .as_ref()
+            .map(error_line)
+            .or_else(|| subline_for(status, boosting, warning.is_some()))
+    } else {
+        subline_for(status, boosting, warning.is_some())
     };
     RouteSurface {
         word,
@@ -288,8 +297,16 @@ pub fn route_surface(status: &AppStatus) -> RouteSurface {
 
 /// §2.1 precedence: Error → NO RETURN PATH → HOLDING → OPTIMIZING → CONNECTING
 /// → CONNECTED / NOT CONNECTED.
+///
+/// P0-3 (invariant I7): a live capture never loses its word to a non-fatal route
+/// or registration warning. Only a latched capture fault renders ERROR while the
+/// run is live; the non-fatal failure moves to the banner ([`notice_for`]).
 fn word_for(status: &AppStatus, boosting: bool, warning_active: bool) -> RouteWord {
-    if status.error.is_some() {
+    if error_word_for(
+        status.error.is_some(),
+        boosting,
+        status.engine.capture_fault.is_some(),
+    ) {
         RouteWord::Error
     } else if warning_active {
         RouteWord::NoReturnPath
@@ -374,8 +391,20 @@ fn relay_label(status: &AppStatus) -> String {
     }
 }
 
-/// The elevation notice is the warn line above the config region (§2.2 row 7).
+/// The banner line in the scrolling region (warn), above the route card.
+///
+/// P0-3 (invariant I7 / roadmap D4 item 4): while a capture run is live, a
+/// non-fatal route or registration failure is a **banner beside** the live word,
+/// not the word itself — the observed defect was ERROR over a session that was
+/// relaying. The banner names the failing subsystem with the existing taxonomy
+/// sentence, so no new copy is introduced. Elevation keeps the slot when it is
+/// the explanation (it is only shown when nothing is running).
 fn notice_for(status: &AppStatus) -> Option<Line> {
+    if status.boosting && status.engine.capture_fault.is_none() {
+        if let Some(error) = status.error.as_ref() {
+            return Some(error_line(error));
+        }
+    }
     match overlay_for(status) {
         Overlay::NeedsElevation => Some(Line::new("notice.needs_admin")),
         Overlay::None => None,
@@ -820,21 +849,112 @@ fn last_hop_provider(route: &ClientRoute) -> Option<String> {
 
 /// The taxonomy sentence for one error kind: one kind, one sentence (§2.8).
 fn error_line(error: &lightspeed_client::app::dto::AppError) -> Line {
-    let key = match error.kind {
+    Line::new(error_line_key(error.kind))
+}
+
+/// The catalogue key of the Error row's taxonomy sentence (§2.2 row 8 / §2.8).
+///
+/// Public because the same key is the `detail_key` token of the render-side
+/// `ui_error` record: the trace names the sentence the card actually showed
+/// instead of re-deriving it from the kind's spelling.
+pub fn error_line_key(kind: AppErrorKind) -> &'static str {
+    match kind {
         AppErrorKind::Capture | AppErrorKind::Tunnel => "error.tunnel",
         AppErrorKind::Route => "error.registration",
         AppErrorKind::Config => "error.config",
         AppErrorKind::Game | AppErrorKind::Validation => "error.game",
         AppErrorKind::Io => "error.io",
         AppErrorKind::Unsupported => "error.unsupported",
-    };
-    Line::new(key)
+    }
+}
+
+/// The `lifecycle::ErrorSource` for a taxonomy kind.
+///
+/// Mirrors the core's command-error mapping (`commands::error_source_for`) so
+/// one visible card has one source token in the trace, whichever layer recorded
+/// the event.
+pub fn error_source_for(kind: AppErrorKind) -> ErrorSource {
+    match kind {
+        AppErrorKind::Capture | AppErrorKind::Tunnel => ErrorSource::Capture,
+        AppErrorKind::Route | AppErrorKind::Validation | AppErrorKind::Io => {
+            ErrorSource::Registration
+        }
+        AppErrorKind::Config => ErrorSource::Config,
+        AppErrorKind::Game => ErrorSource::Game,
+        AppErrorKind::Unsupported => ErrorSource::Route,
+    }
+}
+
+// ── P0-1 render-side observation ───────────────────────────────────────────
+//
+// The shell paints one word per frame (and, when that word is `Error`, one error
+// card). P0-1 asks for a typed record exactly when one of those visible facts
+// changes; the trackers below are the pure comparison, and `app.rs` is the only
+// caller - it turns an observation into a `lifecycle` event. Nothing here feeds
+// back into behaviour: an observation is a log line, never an input.
+
+/// The last word the shell rendered, so a change is observed once (P0-1).
+///
+/// Pure state: [`Self::observe`] compares `RouteWord`s and does no logging; the
+/// caller decides how (and whether) to record the observation.
+#[derive(Clone, Debug, Default)]
+pub struct WordTracker {
+    last: Option<RouteWord>,
+}
+
+/// One rendered word change: what the shell showed and the fact that drove it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WordChange {
+    /// The previous word's catalogue key (`"none"` before the first frame).
+    pub from: &'static str,
+    /// The new word's catalogue key.
+    pub to: &'static str,
+    /// The precedence fact that picked the new word.
+    pub reason: &'static str,
+    /// Whether a boost session was live when the word was rendered.
+    pub boosting: bool,
+}
+
+impl WordTracker {
+    /// Observe the word this frame. `Some` only when it changed since the last
+    /// observation; the very first observation reports `from = "none"` (the
+    /// shell had no word before it painted one).
+    pub fn observe(&mut self, word: RouteWord, boosting: bool) -> Option<WordChange> {
+        if self.last == Some(word) {
+            return None;
+        }
+        let from = self.last.map_or("none", RouteWord::key);
+        self.last = Some(word);
+        Some(WordChange {
+            from,
+            to: word.key(),
+            reason: word_change_reason(word),
+            boosting,
+        })
+    }
+}
+
+/// Why the shell paints `word`: the precedence fact from [`word_for`] (§2.1).
+///
+/// The token is trace vocabulary, not user copy; it names the driving fact so a
+/// `ui.word` change is readable without replaying the status snapshot.
+pub fn word_change_reason(word: RouteWord) -> &'static str {
+    match word {
+        RouteWord::Error => "error",
+        RouteWord::NoReturnPath => "return_path_warning",
+        RouteWord::Holding => "holding",
+        RouteWord::Optimizing => "boosting",
+        RouteWord::Connecting => "connecting",
+        RouteWord::Connected => "relay_connected",
+        RouteWord::NotConnected => "relay_disconnected",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lightspeed_client::app::dto::*;
+    use lightspeed_client::app::status::CaptureFault;
     use lightspeed_client::EngineStatus;
 
     // ── Fixtures ──────────────────────────────────────────────────────────
@@ -1191,8 +1311,9 @@ mod tests {
     }
 
     #[test]
-    fn error_leads_the_word_and_keeps_its_details_behind_the_disclosure() {
-        let mut failed = boosting_status();
+    fn an_error_leads_the_word_when_no_capture_is_live() {
+        // No live run: there is no state to mask, so the error owns the word.
+        let mut failed = status();
         failed.error = Some(AppError::for_kind(AppErrorKind::Tunnel, "WSAEMSGSIZE"));
         failed.tray = TrayState::Error;
         let surface = route_surface(&failed);
@@ -1226,6 +1347,64 @@ mod tests {
         let healthy = status();
         assert_ne!(route_surface(&healthy).word, RouteWord::Error);
         assert!(detail(&healthy).is_none());
+    }
+
+    /// **T13 (unit level)** — an error never masks a live capture.
+    ///
+    /// The field defect: word=ERROR over a session that was relaying. While a
+    /// capture is live a non-fatal route/registration failure is a banner beside
+    /// the live word; only a latched capture fault (`FAULT_LATCHED`) may claim
+    /// the word. Both render paths are asserted, plus the recovery (clearing the
+    /// source restores nothing, because the word never changed).
+    #[test]
+    fn t13_a_non_fatal_error_is_a_banner_beside_a_live_capture() {
+        let mut route_failure = boosting_status();
+        route_failure.error = Some(AppError::registration("relay refused"));
+        route_failure.tray = TrayState::Error;
+        let surface = route_surface(&route_failure);
+        assert_eq!(
+            surface.word,
+            RouteWord::Optimizing,
+            "the live capture keeps its word while a registration warning is up"
+        );
+        assert_eq!(
+            surface.subline.as_ref().map(|line| line.key),
+            Some("route.relaying_route"),
+            "the hero readout stays the live route, not the failure sentence"
+        );
+        assert_eq!(
+            surface.notice.as_ref().map(|line| line.key),
+            Some("error.registration"),
+            "the failure is rendered as a banner in addition to the word"
+        );
+        assert!(surface.warning.is_none(), "not the starvation warning slot");
+
+        // A latched capture fault is the one error that may take the word, and
+        // it takes it with its own sentence.
+        let mut capture_fault = boosting_status();
+        capture_fault.error = Some(AppError::latched_capture(
+            "windivert_open: 0x8032000A (ms_since_last_close=14)",
+            3,
+        ));
+        capture_fault.engine.capture_fault = Some(CaptureFault {
+            kind: "windivert_open".to_string(),
+            detail: "0x8032000A".to_string(),
+            epoch: 3,
+            close_age_ms: Some(14),
+        });
+        let surface = route_surface(&capture_fault);
+        assert_eq!(surface.word, RouteWord::Error);
+        assert_eq!(
+            surface.subline.as_ref().map(|line| line.key),
+            Some("error.tunnel")
+        );
+        assert!(surface.notice.is_none(), "the card owns the whole state");
+
+        // Clearing the source restores the live word without a restart: the word
+        // never left, which is the point of the banner.
+        let recovered = boosting_status();
+        assert_eq!(route_surface(&recovered).word, RouteWord::Optimizing);
+        assert!(route_surface(&recovered).notice.is_none());
     }
 
     #[test]
@@ -2264,5 +2443,128 @@ mod tests {
                 }
             },
         })
+    }
+
+    // ── P0-1: word-change observation (ui.word) ───────────────────────────
+
+    /// The change rule: the first painted word is observed once (from `none`),
+    /// an unchanged word is silent, and each real change is reported with the
+    /// key it moved from and to. This is the whole admission rule for
+    /// `ui.word`, so it is pinned directly.
+    #[test]
+    fn word_changes_are_observed_once_and_unchanged_words_are_silent() {
+        let mut tracker = WordTracker::default();
+        assert_eq!(tracker.last, None);
+
+        let first = tracker
+            .observe(RouteWord::NotConnected, false)
+            .expect("the first painted word is a change from no word");
+        assert_eq!(first.from, "none");
+        assert_eq!(first.to, "state.disconnected");
+        assert_eq!(first.reason, "relay_disconnected");
+        assert!(!first.boosting);
+        assert_eq!(tracker.last, Some(RouteWord::NotConnected));
+
+        assert_eq!(
+            tracker.observe(RouteWord::NotConnected, false),
+            None,
+            "an unchanged word must not be emitted on every frame"
+        );
+
+        let connected = tracker
+            .observe(RouteWord::Connected, false)
+            .expect("reaching the relay link is a change");
+        assert_eq!(connected.from, "state.disconnected");
+        assert_eq!(connected.to, "state.connected");
+        assert_eq!(connected.reason, "relay_connected");
+
+        let optimizing = tracker
+            .observe(RouteWord::Optimizing, true)
+            .expect("a live boost is a change");
+        assert_eq!(optimizing.from, "state.connected");
+        assert_eq!(optimizing.to, "state.optimizing");
+        assert_eq!(optimizing.reason, "boosting");
+        assert!(optimizing.boosting, "the record carries the boost fact");
+
+        // A same-word frame with a different boost fact is still the same word.
+        assert_eq!(tracker.observe(RouteWord::Optimizing, false), None);
+    }
+
+    /// The reason token is a total, stable projection of the word set: every
+    /// word names its driving fact, and the Error card's precedence is "error".
+    #[test]
+    fn every_word_names_the_fact_that_drives_it() {
+        for (word, reason) in [
+            (RouteWord::NotConnected, "relay_disconnected"),
+            (RouteWord::Connected, "relay_connected"),
+            (RouteWord::Connecting, "connecting"),
+            (RouteWord::Holding, "holding"),
+            (RouteWord::Optimizing, "boosting"),
+            (RouteWord::NoReturnPath, "return_path_warning"),
+            (RouteWord::Error, "error"),
+        ] {
+            assert_eq!(word_change_reason(word), reason);
+            // A word's trace key and its reason are both non-empty tokens.
+            assert!(!word.key().is_empty());
+        }
+
+        // The tracker walks the full precedence ladder the surface can paint.
+        let ladder = [
+            RouteWord::NotConnected,
+            RouteWord::Connecting,
+            RouteWord::Connected,
+            RouteWord::Holding,
+            RouteWord::Optimizing,
+            RouteWord::NoReturnPath,
+            RouteWord::Error,
+        ];
+        let mut tracker = WordTracker::default();
+        for word in ladder {
+            assert!(
+                tracker.observe(word, false).is_some(),
+                "{word:?} must be observed as a change"
+            );
+        }
+        assert_eq!(tracker.last, Some(RouteWord::Error));
+    }
+
+    /// `detail_key` is the catalogue key of the sentence the card shows, so a
+    /// trace reader can resolve the exact copy without the enum spelling.
+    #[test]
+    fn error_line_key_names_the_sentence_each_kind_shows() {
+        for (kind, key) in [
+            (AppErrorKind::Capture, "error.tunnel"),
+            (AppErrorKind::Tunnel, "error.tunnel"),
+            (AppErrorKind::Route, "error.registration"),
+            (AppErrorKind::Config, "error.config"),
+            (AppErrorKind::Game, "error.game"),
+            (AppErrorKind::Validation, "error.game"),
+            (AppErrorKind::Io, "error.io"),
+            (AppErrorKind::Unsupported, "error.unsupported"),
+        ] {
+            assert_eq!(error_line_key(kind), key);
+            // The rendering path and the trace token cannot drift: the card is
+            // built from the same key.
+            let error = AppError::for_kind(kind, "detail");
+            assert_eq!(error_line(&error).key, key);
+        }
+    }
+
+    /// The render-side source token agrees with the core's command-error
+    /// mapping, so one card never appears under two different sources.
+    #[test]
+    fn error_sources_match_the_core_command_error_mapping() {
+        for (kind, source) in [
+            (AppErrorKind::Capture, ErrorSource::Capture),
+            (AppErrorKind::Tunnel, ErrorSource::Capture),
+            (AppErrorKind::Route, ErrorSource::Registration),
+            (AppErrorKind::Validation, ErrorSource::Registration),
+            (AppErrorKind::Io, ErrorSource::Registration),
+            (AppErrorKind::Config, ErrorSource::Config),
+            (AppErrorKind::Game, ErrorSource::Game),
+            (AppErrorKind::Unsupported, ErrorSource::Route),
+        ] {
+            assert_eq!(error_source_for(kind), source);
+        }
     }
 }
