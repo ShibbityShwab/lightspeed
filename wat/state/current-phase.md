@@ -14,16 +14,16 @@
 
 ## Recent entries
 
-### 2026-11-23 (merge) - P0 work committed, merged with origin/master (PR #226 a11y), PR #228 open for CI/owner gate
+### 2026-11-23 (merge) - P0 work committed, merged with origin/master (PR #226 a11y), and landed on master via PR #228
 
 **Agent:** lead + `desktop-platform-2` (app.rs + GUI budget conflicts) + `architect` (WAT state conflicts).
 
 - **Commits:** the P0 work was committed in 4 reviewable commits (instrumentation/recovery/state machine; docs truth pass; evidence harness; WAT state) on top of `9e8029b`, then `origin/master` (`f2e7bb0`, PR #226 accessibility) was merged. Four conflicts were resolved: `client-gui/src/app.rs` (keep upstream's `new`/`new_offline`/`build` split; lifecycle identity init stays only in the real `new`, so the offline/`--a11y-dump` renderer remains side-effect-free); `client/tests/gui_boundary.rs` (both budget sets kept; merged measured counts `app.rs` 5566, `presence.rs` 758, `route_surface.rs` 2570, plus upstream `a11y.rs` 631 / `a11y_dump.rs` 420); `wat/state/current-phase.md` and `wat/state/decisions/2026-11.md` (both sides kept, newest first).
 - **Gate on the merged tree (clean rebuild):** fmt clean; workspace clippy 0 warnings; workspace **2,067 / 0 / 7**; GUI clippy 0; GUI **254 / 0 / 1**; WinDivert **1,724 / 0 / 9**; localization 4/4. Evidence `wat/evidence/2026-11-23/merge/lead-gate.log`. Note: the first merged-tree run failed 5 `cli_compat` goldens because the shared `CARGO_TARGET_DIR` had test binaries from the earlier throwaway trial worktree (their `CARGO_MANIFEST_DIR` pointed at the deleted temp path); `cargo clean -p lightspeed-client` + `-p lightspeed-gui` and a clean rerun fixed it — no code change.
-- **Landed for review:** branch `feat/windivert-stability-p0` pushed; **[PR #228](https://github.com/ShibbityShwab/lightspeed/pull/228)** open against `master` with the full P0 summary, merge resolution and gate counts.
-- **Open:** CI on PR #228 is pending; the owner performs the merge after checks. **P0-6 real-driver rows remain unpassed** (clean boot, OD-6) and there is **no stability claim**. No tag/publish.
+- **Landed:** branch `feat/windivert-stability-p0` was pushed and **[PR #228](https://github.com/ShibbityShwab/lightspeed/pull/228)** opened against `master`; the full CI suite passed and the PR was **squash-merged as `01f0eed`** (2026-11-23; Windows/Linux/macOS builds, Check & Test, Feature Matrix full/ml/quic, QUIC integration, Headless GUI Smoke, Localization, cargo audit/deny, CodeQL). The remote branch was deleted by the merge.
+- **Open:** **P0-6 real-driver rows remain unpassed** (clean boot, OD-6) and there is **no stability claim**. No tag/publish.
 
-**Verified:** clean merged-tree gate counts above; conflict resolutions re-checked (no markers, `git diff --cached --check` clean); `gui_boundary` G1-G7 green; PR #228 created. **Not verified:** CI result at time of writing; P0-6 rows; runtime lifecycle evidence.
+**Verified:** clean merged-tree gate counts above; conflict resolutions re-checked (no markers, `git diff --cached --check` clean); `gui_boundary` G1-G7 green; **PR #228 merged (`01f0eed`) with all required checks green**; master contains the lifecycle/harness/docs files and the merged GUI budget rows. **Not verified:** P0-6 rows; runtime lifecycle evidence.
 
 ### 2026-11-23 (upstream check) - PR #226 merges cleanly with the P0 work after four mechanical conflicts; trial gate green; not merged
 
