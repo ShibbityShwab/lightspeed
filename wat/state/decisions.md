@@ -3,7 +3,7 @@
 > Canonical index of significant technical and procedural decisions for LightSpeed.
 > Entries live in monthly files under [`decisions/`](decisions/); this file is the
 > contract and the map, not the log itself.
-> Last entry: 2026-11-18
+> Last entry: 2026-11-23
 
 ## Where entries live
 

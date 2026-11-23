@@ -1532,8 +1532,10 @@ impl<P: Platform> LightSpeedApp<P> {
         }
         self.discovery = DiscoveryState::Done;
     }
-
     fn poll_health(&mut self) {
+        if self.status.control_registered {
+            self.commands.clear_stale_registration_error();
+        }
         // Resolve the window's connect attempt from the engine's own facts: the
         // keepalive coming up, registration completing or a registration error
         // all end the attempt (spec §2.1/§2.2 row 2). This poll runs every frame

@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.5] - 2026-11-23
+
+### Changed
+
+- **One permanent non-diverting WinDivert handle keeps the interception driver
+  loaded for the app lifetime** (`client`, `client-gui`). `pin_driver()` opens a
+  single handle with the `"false"` filter (Network layer, priority 0, normal
+  flags) before the first diverting handle; a normal Stop closes the intercept,
+  inject and shadow handles and leaves the pin (and the loaded driver) alone,
+  and Optimize reopens only the diverting handles. The pin is released only by
+  an explicit app shutdown/Quit (after handle teardown) or by process exit, so a
+  Stop never unloads/reloads the driver and the unload/load window that could
+  leave a WFP filter registered is not entered. A Stop remains a true Stop: no
+  diverting handle, tunnel, hold watcher or per-run state survives it.
+- **WinDivert handle instrumentation.** Every logical open/close is logged once
+  with a monotonic per-process id, its role (`pin`/`intercept`/`inject`/
+  `shadow`/`legacy`), layer, priority, flags and filter, with per-kind counters
+  for evidence runs. Handle metadata only — never packet payloads or process
+  data.
+- **Bounded `FWP_E_IN_USE` retry.** An open that hits `FWP_E_IN_USE` with no pin
+  held is retried a fixed number of times with a bounded backoff; with the pin
+  held it fails immediately with the actionable remedy instead of retrying.
+
+### Fixed
+
+- **A successful control-plane registration clears the stale `Registration failed`
+  card** left by an earlier failed command; unrelated command errors are not
+  cleared.
+- **Self-update no longer aborts on a locked WinDivert driver file.** The
+  elevated swap script stops the `WinDivert` service and waits up to 10 s for it
+  to stop before copying `WinDivert*.dll`/`.sys`, and a `finally` block
+  relaunches the installed GUI when it is present. The GUI refuses to install
+  while the driver pin is held and runs a full shutdown (true Stop + pin
+  release) before the script.
+- **A failed interceptor start drains the registration it spawned** instead of
+  leaving a supervisor retrying a relay nothing uses.
+- **A stale start-of-match hold can no longer release a stopped run** (the
+  fallback only applies while interception is active), and Stop cancels the hold
+  watcher with the run it belonged to.
+
+### Verification
+
+Real WinDivert driver on a clean boot with real loopback relays and a synthetic
+game client carrying traffic; build `84e15c3`, GUI SHA256
+`F8ECE5824D674B186D2DB6C2D91703858F597B37B8A7FA3F317B4A6936EA8DFC`.
+**84/84 matrix rows PASS** (30/30 Stop→Optimize traffic cycles, 20/20
+Quit→relaunch, 10/10 scope changes, 5/5 game restarts, relay A→B→A, TCP-profile
+Stop, Stop during hold, force-kill active/idle, self-update path), with **0**
+`FWP_E_IN_USE`, **0** failed opens and **0** retries. Evidence:
+`wat/evidence/2026-11-23/task-107-matrix-84e15c3v2-20261123-115633/` and
+`wat/evidence/2026-11-23/task-107-release-report.md`.
+
+**Accepted evidence gap:** the failing-before control on the 1.12.3 build did
+not reproduce on a clean boot (30/30 cycles, 0 failure hits, 1 BLOCKED row:
+`wat/evidence/2026-11-23/task-107-control-1123-20261123-120914/`). The owner
+accepted the gap; this release does not claim to "fix the original fault" — it
+removes the Stop/start unload/reload churn path by construction.
+
+### Notes
+
+- Windows-only: the pin is a WinDivert mechanism. On builds without the
+  `windivert-redirect` feature `pin_driver`/`release_driver_pin` are no-ops.
+- WinDivert 2.2 keeps its driver loaded after the last handle: after Quit the
+  WFP provider/sublayers remain (1/20) and `WinDivert64.sys` stays locked until
+  the service is stopped or the machine restarts. This is unchanged by design
+  and is not a boot-zero guarantee.
+- **Release-record correction (2026-11-23).** `v1.12.3` and `v1.12.4` were
+  tagged while their in-tree notes still said "release candidate", and 1.12.4's
+  real-driver claim rested on four rapid start/stop cycles that carried zero
+  intercepted/tunnelled packets, so it was not established. Corrected in
+  `docs/release-notes-1.12.3.md`, `docs/release-notes-1.12.4.md` and the WAT
+  decision log; historical tags are not rewritten.
+
 ## [1.12.4] - 2026-11-22
 
 ### Fixed

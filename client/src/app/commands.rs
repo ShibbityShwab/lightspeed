@@ -58,6 +58,14 @@ impl AppCore {
         self.session.clear_error();
     }
 
+    /// Clear a stale registration error once the engine reports the control
+    /// plane registered. The retry may have succeeded in the background while
+    /// the error card kept the previous command failure on screen.
+    pub fn clear_stale_registration_error(&mut self) {
+        self.session
+            .clear_error_matching("control-plane registration failed");
+    }
+
     /// The engine's current status snapshot (read-only passthrough).
     pub fn snapshot(&self) -> crate::EngineStatus {
         lock_or_recover(&self.engine).snapshot()
