@@ -199,20 +199,25 @@ curl http://YOUR_PROXY_IP:8080/health
 
 ### Windows 上的“WinDivert 打开失败”/`FWP_E_IN_USE` (0x8032000A)
 
-WinDivert 为每个打开的句柄注册一个 WFP 标注/过滤器。如果句柄从未关闭，则该过滤器状态将持续存在，并且下一个 `WinDivertOpen` 会失败并显示 `FWP_E_IN_USE` (0x8032000A)，即使没有进程明显使用 WinDivert。
+只有带有真实捕获过滤器的句柄——intercept（`udp and outbound …`）和 shadow（`udp and inbound …`）——才拥有 WFP callout/filter。整个进程生命周期持有的 pin 句柄和 inject 句柄使用 `"false"` 过滤器，不转发任何流量，也不拥有 WFP 对象。因此 WFP callout/filter 并不是“每个打开的句柄一个”，持有 pin 也不是 WFP 状态锁：在 2026-11-23 的现场记录中，pin 保持打开，而下一次 intercept 打开仍然以 `FWP_E_IN_USE` 失败。
 
-最近的 LightSpeed 构建关闭了每个有序关闭路径上的捕获和注入句柄，包括 `--watch` 和 `--start-interceptor` 中的 Ctrl+C 以及 GUI 中的 **Quit**，并且在关闭之前使用 `WinDivertShutdown` 解除了接收循环的阻塞，因此拆卸是确定性的。硬终止（`taskkill /f`、崩溃或关闭控制台窗口）仍然可能使 WinDivert 2.2.x 驱动程序处于陈旧状态；这是上游驱动程序限制（basil00/WinDivert#294、#406），一旦进程消失，用户空间就无法清除。
+`FWP_E_IN_USE` 表示 WFP 对象仍被引用（例如强制结束后内核尚未完成删除的上一个进程的过滤器），或者某个 callout 正在被并发注册/注销。“没有进程明显在使用 WinDivert”并不能证明没有引用，而且目前没有采集 WFP 状态，所以不要把错误文本当作根本原因。
 
-如果你仍然点击它：
+LightSpeed 在每条正常关闭路径上（`--watch`/`--start-interceptor` 中的 Ctrl+C、GUI 中的**退出**）关闭 intercept、inject 和 shadow 句柄，在关闭前用 `WinDivertShutdown` 解除接收循环的阻塞，并等待所有者线程确认。这种确定性针对的是应用的**句柄所有权**；内核侧的 WFP teardown 是另一条路径，其失败对用户态不可见。
 
-1. **优雅地退出并等待片刻**：使用 CLI Ctrl+C 或 GUI 的 **退出**，然后在重新启动之前给句柄一两秒的时间来关闭。
-2. **停止 WinDivert 服务**（在某些情况下避免重新启动；请注意，驱动程序与计算机上任何其他基于 WinDivert 的应用程序共享）：
+如果仍然出现：
+
+1. **重试一次 Start。** 下一个补丁会在 pin 保持期间自动重试 `FWP_E_IN_USE`（有界，约 5 秒），并可能重新创建 pin 一次；1.12.5 仅在**没有**持有 pin 时重试，因此那里重试意味着先 Stop 再重新 Optimize。
+2. **正常退出并稍等片刻**：使用 CLI 的 Ctrl+C 或 GUI 的**退出**，然后给句柄一两秒时间关闭再重新启动。
+3. **停止 WinDivert 服务**（管理员权限；这是显式重置，LightSpeed 不会自动执行，并且会影响机器上任何其他基于 WinDivert 的应用——请先确认没有其他 WinDivert 客户端在运行）：
    ```powershell
    sc stop windivert
    ```
-3. **完全关闭，而不是重新启动**：Windows“重新启动”可以重用保持陈旧状态的内核会话；完全**关机 → 开机**会清除它。
+4. **完全关机**是最后手段，且仅当无法排除外部 WinDivert 使用者时使用：Windows **重启**可能复用持有旧状态的内核会话，因此完整的**关机 → 开机**才是唯一可靠的整机清理方式。它不是首选方案，LightSpeed 不会在没有该理由时建议重启。
 
-> **提示：** 在 v1.2.2 及更早版本中，一个单独的错误（数据平面身份验证拒绝所有数据包，问题 #59）冻结了连接并迫使用户反复终止客户端，这就是触发大多数 `FWP_E_IN_USE` 报告的原因。该身份验证错误已在 v1.2.3 中修复。
+WinDivert 2.2 在最后一个句柄关闭后仍保持驱动程序加载：WFP 提供程序及其 20 个子层仍然存在（1 / 20），`WinDivert64.sys` 会一直锁定，直到停止服务或重启机器。pin 不会改变这一点，也不能保证 Stop 时驱动程序会被卸载。
+
+> **提示：** 在 v1.2.2 及更早版本中，另一个缺陷（数据平面认证拒绝所有数据包，issue #59）会冻结连接，迫使用户反复强制结束客户端，从而引发了大多数 `FWP_E_IN_USE` 报告。该认证缺陷已在 v1.2.3 中修复。
 
 ---
 

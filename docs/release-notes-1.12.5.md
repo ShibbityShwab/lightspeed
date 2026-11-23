@@ -1,9 +1,17 @@
 # LightSpeed 1.12.5 — a pinned WinDivert driver and a true Stop
 
 **Status: release candidate, 2026-11-23.** A Windows interception-lifecycle
-change: one non-diverting WinDivert handle is pinned for the app lifetime, so a
-normal Stop no longer unloads and reloads the driver. No protocol, wire, config
+change: one non-diverting WinDivert handle is pinned for the app lifetime so
+LightSpeed keeps a handle to the driver across a Stop. No protocol, wire, config
 or CLI change. Tagging and publishing remain the owner's gate.
+
+> **Truth-pass correction (2026-11-23).** Reading the 2026-11-23 audits against
+> this text found four claims that the evidence does not support (the pin as a
+> WFP guarantee, an unload/reload churn path it removes, a WFP filter per open
+> handle, and the scope of the 84-row matrix). They are corrected in place below
+> and in `docs/troubleshooting.md`, the CHANGELOG and the code comments; no tag,
+> release body or published text is rewritten. The P0 recovery/instrumentation
+> patch is **unreleased** and is not described here as shipped behaviour.
 
 ## Why
 
@@ -13,16 +21,16 @@ teardown). The failure that started that line — after one interception session
 the next start could see an orphaned WinDivert WFP provider even though no
 process held a handle — was never reproduced in a controlled environment.
 
-This release changes the shape of the problem instead of adding another close
-path. A normal Stop closes the intercept, inject and shadow handles; with no
-live handle, nothing keeps the WinDivert driver/service loaded for the next
-start, and the load/unload churn path that this line of releases was chasing
-lives there. 1.12.5 keeps one permanent **non-diverting** handle open (WinDivert
-filter `"false"`, normal flags, Network layer, priority 0) for the whole app
-lifetime. A live WinDivert handle keeps the driver/service loaded, so a Stop no
-longer releases it and Optimize only reopens the diverting handles. The matrix
-does not try to prove the old build actually unloaded the driver; it verifies
-the new lifecycle, and the pin removes the churn path by construction.
+This release changes where the handle lives, not the driver's load state. A
+normal Stop closes the intercept, inject and shadow handles; WinDivert 2.2 then
+keeps the driver/service loaded anyway (the DLL marks the service for deletion
+but never stops it), so the provider and its 20 sublayers persist until service
+stop or reboot. 1.12.5 keeps one permanent **non-diverting** handle open
+(WinDivert filter `"false"`, normal flags, Network layer, priority 0) for the
+whole app lifetime, so a later Optimize reopens only the diverting handles. The
+pin keeps the driver referenced; it owns no WFP object and is **not** a guarantee
+that the next filter open succeeds — the 2026-11-23 field trace has the pin open
+and the next intercept open still failing `FWP_E_IN_USE` (0x8032000A).
 
 ## The design
 
@@ -42,11 +50,14 @@ the new lifecycle, and the pin removes the churn path by construction.
   Stop first and then releases the pin (after handle teardown, never before);
   dropping the engine and process exit release it too. A user Stop deliberately
   keeps it.
-- **Bounded retry, no retry loop.** If an open fails with `FWP_E_IN_USE` and
-  **no** pin is held, it is retried a small fixed number of times with a bounded
-  backoff — the driver may still be winding down from a previous process. With
-  the pin held, the stale state is not a cold start, so the open fails
-  immediately with the actionable remedy.
+- **Bounded retry, no retry loop (as shipped in 1.12.5).** If an open fails with
+  `FWP_E_IN_USE` and **no** pin is held, it is retried a small fixed number of
+  times with a bounded backoff. With the pin held, 1.12.5 fails immediately with
+  the actionable remedy, on the assumption that the stale state must be
+  external. The 2026-11-23 trace contradicts that assumption (the pin was held
+  and the next open failed twice in the same process); the unreleased P0 patch
+  retries while pinned, cycles the pin once, and ships the R1–R4 remedy. Do not
+  read 1.12.5 as having that behaviour.
 - **Instrumentation.** Every logical WinDivert open is logged with a monotonic
   per-process id and its role (`pin`, `intercept`, `inject`, `shadow`,
   `legacy`), layer, priority, flags (`0x0000` normal, `0x0001` sniff, `0x0008`
@@ -92,7 +103,15 @@ client with real traffic. Build: branch `fix/pinned-driver-1.12.5`, HEAD
 `84e15c3` (the updater fix), GUI SHA256
 `F8ECE5824D674B186D2DB6C2D91703858F597B37B8A7FA3F317B4A6936EA8DFC`.
 
-**84/84 matrix rows PASS, 0 FAIL, 0 BLOCKED, 0 SKIP.**
+**84 matrix rows PASS, 0 FAIL, 0 BLOCKED, 0 SKIP** on build `84e15c3`. This is
+**84 assertions over ~14 scenario families**, not 84 distinct risks, and it is
+**not** the release artifact: the GUI binary used for the run is a different
+build from the published `v1.12.5` asset (see the truth-pass correction below).
+The matrix preflight refused any dirty kernel state, so recovery from the
+product's own residue was untestable by construction; no row combines a long
+traffic-bearing session with a Stop/start transition, and the `update` row
+passes because the harness stops the WinDivert service itself. The UI error-card
+lifecycle was not asserted (no UI capture).
 Evidence:
 `wat/evidence/2026-11-23/task-107-matrix-84e15c3v2-20261123-115633/`;
 report: `wat/evidence/2026-11-23/task-107-release-report.md` (round 2).
@@ -117,7 +136,10 @@ intercept/inject/shadow id set that was closed by id on the next Stop, never
 reopened or released the pin, and showed a zero relay-forwarding delta in the
 2 s quiet window after each Stop. Each of the 20 Quit/relaunch runs opened
 exactly one pin, released it after the last diverting close, and relaunched into
-traffic; no quit left a diverting filter, callout or handle behind.
+traffic; no quit left a LightSpeed **handle** behind. The shared driver and its
+WFP provider/sublayer objects (1 / 20) stay loaded until service stop or reboot,
+as documented below; the matrix does not prove that per-handle WFP objects were
+removed.
 
 ## Accepted evidence gap: the old fault was not reproduced
 
@@ -133,10 +155,12 @@ The historic failure needed conditions this driven loop does not produce
 gap on 2026-11-23.
 
 Therefore this release does **not** claim the pin "fixes the original fault".
-What is established is narrower and checkable: the pin keeps the driver loaded
-across Stop, so the unload/reload churn path is removed by construction, and a
-traffic-bearing real-driver matrix exercising the lifecycle shows no
-`FWP_E_IN_USE` and no failed opens.
+What is established is narrower and checkable: a traffic-bearing real-driver
+matrix exercising the same-scope Stop/start lifecycle on `84e15c3` shows no
+`FWP_E_IN_USE` and no failed opens in the scenarios it ran. The pin keeps the
+driver referenced across a Stop; it does not change the driver's unload
+behaviour in this environment (WinDivert 2.2 kept it loaded for 1.12.4 too) and
+it is not a WFP-state guarantee.
 
 ## Upgrade
 
@@ -158,8 +182,8 @@ If anything regresses, reinstall the previous 1.12.4 build. There is no kernel
 state to migrate back. A machine that has run any 1.12.x build keeps the
 WinDivert driver loaded after Quit until a reboot or `sc.exe stop WinDivert`, so
 the reinstaller must stop the service (or reboot) before changing driver files.
-Rolling back does not recreate anything beyond 1.12.4's own unload-on-Stop
-behaviour.
+Rolling back does not recreate a driver unload-on-Stop: WinDivert 2.2 kept the
+driver loaded for 1.12.4 as well.
 
 ## Remaining risks and known limitations
 
@@ -201,3 +225,37 @@ corrected in the living documentation without rewriting history:
 The tags and their release bodies are not rewritten. The dated corrections are
 in `docs/release-notes-1.12.3.md`, `docs/release-notes-1.12.4.md`, the
 corresponding CHANGELOG notes and `wat/state/decisions/2026-11.md`.
+
+## Claims corrected by the 2026-11-23 audits
+
+These are the sentences the next investigation would otherwise inherit as
+premises. The living docs, the CHANGELOG and the code comments now say the
+narrower true thing:
+
+- **"The pin guarantees the next open / prevents `FWP_E_IN_USE`" — false.** The
+  06:49 field event has the pin active (`id=1`) and the next intercept open
+  failing `0x8032000A` 1.279 s after the close, then again 4.13 s later. The pin
+  keeps the driver referenced; it owns no WFP object and is not a WFP-state
+  lock.
+- **"The pin removes the unload/reload churn path" — contradicted.** WinDivert
+  2.2 keeps the driver loaded after the last handle and its provider plus 20
+  sublayers persist until service stop/reboot, so there is no unload churn for
+  the pin to prevent in this environment; the QA update row passes only because
+  the harness stops the service itself.
+- **"A WFP callout/filter is registered for each open handle" — false.** Only
+  the intercept and shadow handles carry a real filter; the pin and inject
+  handles use filter `"false"` and own no WFP object.
+- **"A previous LightSpeed run left its WFP filter/callout registered" — not a
+  diagnosis.** The 06:49 failure had no second LightSpeed process, and
+  `FWP_E_IN_USE` also covers a concurrent callout registration/unregistration.
+  No WFP state was captured, so a leftover object cannot be excluded either; the
+  app must not present the guess as a cause.
+- **"With the pin held, retrying cannot help" — unproven, and the shipped
+  consequence is terminal.** 1.12.5 makes one attempt; the unreleased P0 patch
+  replaces that with the bounded R1 retry (while pinned) and one R2 pin-cycle,
+  and the R1–R4 remedy copy. This release's behaviour is the old one.
+- **"84/84" — scoped.** 84 assertions over ~14 scenario families on `84e15c3`,
+  a different binary from the published artifact, with a preflight that refuses
+  a dirty kernel, no long traffic-bearing transition row and no UI-card
+  assertion. The number is accurate as rows, not as coverage of the failure
+  class and not as evidence for the release artifact.

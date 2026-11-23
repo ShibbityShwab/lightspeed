@@ -199,20 +199,25 @@ Der Interceptor erfasst Pakete, bevor das Spiel Antworten empfangen kann, und de
 
 ### „WinDivert-Öffnung fehlgeschlagen“ / `FWP_E_IN_USE` (0x8032000A) unter Windows
 
-WinDivert registriert einen WFP-Callout/Filter für jedes offene Handle. Wenn ein Handle nie geschlossen wird, bleibt dieser Filterstatus bestehen und der nächste `WinDivertOpen` schlägt mit `FWP_E_IN_USE` (0x8032000A) fehl, obwohl kein Prozess sichtbar WinDivert verwendet.
+Nur die Handles mit einem echten Capture-Filter – das Intercept-Handle (`udp and outbound …`) und das Shadow-Handle (`udp and inbound …`) – besitzen ein WFP-Callout/Filter. Das prozessweite Pin-Handle und das Inject-Handle verwenden den Filter `"false"`, leiten keinen Verkehr um und besitzen kein WFP-Objekt. Ein WFP-Callout/Filter ist daher nicht „eines pro offenem Handle“, und ein gehaltenes Pin ist keine Sperre für den WFP-Zustand: Im Feldprotokoll vom 23.11.2026 ist das Pin geöffnet und das nächste Intercept-Öffnen schlägt weiterhin mit `FWP_E_IN_USE` fehl.
 
-Aktuelle LightSpeed-Builds schließen sowohl die Capture- als auch die Inject-Handles auf jedem ordnungsgemäßen Shutdown-Pfad, einschließlich Strg+C in `--watch` und `--start-interceptor` und **Quit** in der GUI, und die Empfangsschleife wird mit `WinDivertShutdown` vor dem Schließen entsperrt, sodass das Teardown deterministisch ist. Ein Hard Kill (`taskkill /f`, ein Absturz oder das Schließen des Konsolenfensters) kann immer noch dazu führen, dass der WinDivert 2.2.x-Treiber veraltet ist. Das ist eine Einschränkung des Upstream-Treibers (basil00/WinDivert#294, #406), die der Userspace nicht löschen kann, sobald der Prozess beendet ist.
+`FWP_E_IN_USE` bedeutet, dass das WFP-Objekt noch referenziert wird (zum Beispiel ein Filter eines früheren Prozesses, den der Kernel nach einem harten Kill noch nicht fertig gelöscht hat), oder dass ein Callout gerade parallel registriert/deregistriert wird. „Kein Prozess verwendet sichtbar WinDivert“ beweist nicht, dass niemand die Referenz hält, und es wird derzeit kein WFP-Zustand erfasst; behandeln Sie den Fehlertext daher nicht als Ursache.
 
-Wenn Sie es immer noch treffen:
+LightSpeed schließt die Intercept-, Inject- und Shadow-Handles auf jedem geordneten Shutdown-Pfad (Strg+C in `--watch`/`--start-interceptor`, **Beenden** in der GUI), entsperrt die Empfangsschleife vor dem Schließen mit `WinDivertShutdown` und wartet auf die Bestätigung der Besitzer-Threads. Diese Determinismus-Zusage gilt für die **Handle-Ownership** der App; das WFP-Teardown im Kernel ist ein separater Pfad, dessen Fehler für den Userspace nicht sichtbar sind.
 
-1. **Beenden Sie ordnungsgemäß und warten Sie einen Moment**: Verwenden Sie die CLI-Strg+C-Taste oder **Beenden** der GUI und geben Sie den Handles dann ein oder zwei Sekunden Zeit, um sie zu schließen, bevor Sie sie neu starten.
-2. **Beenden Sie den WinDivert-Dienst** (vermeidet in manchen Fällen einen Neustart; beachten Sie, dass der Treiber mit allen anderen WinDivert-basierten Apps auf dem Computer gemeinsam genutzt wird):
+Wenn es weiterhin auftritt:
+
+1. **Starten Sie einmal erneut.** Der nächste Patch wiederholt `FWP_E_IN_USE` automatisch, solange das Pin gehalten wird (begrenzt, ca. 5 s), und kann das Pin einmal neu aufsetzen; 1.12.5 wiederholt nur, solange **kein** Pin gehalten wird – ein erneuter Versuch bedeutet dort also Stop und erneut Optimieren.
+2. **Beenden Sie ordnungsgemäß und warten Sie einen Moment**: Verwenden Sie Strg+C in der CLI oder **Beenden** in der GUI und geben Sie den Handles ein bis zwei Sekunden zum Schließen, bevor Sie neu starten.
+3. **Beenden Sie den WinDivert-Dienst** (Administrator; dies ist ein ausdrücklicher Reset, den LightSpeed nicht automatisch ausführt, und er betrifft jede andere WinDivert-basierte App auf dem Rechner – stellen Sie zuerst sicher, dass kein anderer WinDivert-Client läuft):
    ```powershell
    sc stop windivert
    ```
-3. **Vollständiges Herunterfahren, kein Neustart**: Windows „Neustart“ kann die Kernel-Sitzung wiederverwenden, die den veralteten Zustand enthält; ein vollständiges **Herunterfahren → Einschalten** löscht es.
+4. **Vollständiges Herunterfahren** ist die letzte Möglichkeit und nur, wenn ein externer WinDivert-Nutzer nicht ausgeschlossen werden kann: Ein Windows-**Neustart** kann die Kernel-Sitzung mit dem veralteten Zustand wiederverwenden, daher ist ein vollständiges **Herunterfahren → Einschalten** die einzige zuverlässige Bereinigung auf Maschinenebene. Es ist nicht die erste Maßnahme, und LightSpeed rät nicht ohne diesen Grund zum Neustart.
 
-> **Tipp:** In Version 1.2.2 und früher fror ein separater Fehler (Authentifizierung auf Datenebene lehnte alle Pakete ab, Problem Nr. 59) die Verbindung ein und zwang Benutzer, den Client wiederholt zu beenden, was die meisten `FWP_E_IN_USE`-Berichte auslöste. Dieser Authentifizierungsfehler wurde in Version 1.2.3 behoben.
+WinDivert 2.2 hält seinen Treiber nach dem letzten Handle geladen: Der WFP-Provider und seine 20 Unterschichten bleiben bestehen (1 / 20) und `WinDivert64.sys` bleibt gesperrt, bis der Dienst beendet oder der Rechner neu gestartet wird. Das ändert das Pin nicht, und es ist keine Garantie dafür, dass der Treiber bei einem Stop entladen wird.
+
+> **Tipp:** In v1.2.2 und früher fror ein separater Fehler (Datenebenen-Authentifizierung verwarf alle Pakete, Issue #59) die Verbindung ein und zwang Benutzer, den Client wiederholt zu beenden – das löste die meisten `FWP_E_IN_USE`-Meldungen aus. Dieser Auth-Fehler ist in v1.2.3 behoben.
 
 ---
 
